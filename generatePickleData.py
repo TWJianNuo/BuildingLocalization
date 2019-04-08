@@ -430,13 +430,19 @@ def reSizeImg(integratedImage):
     # rgb_ex.show()
     return rgb_ex
 class singleBuildingComp:
-    def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, sampledPts):
+    def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, imgSizeDict, tr_grid2oxtsDict, imgPathDict,
+                 tr_oxts2velo, extrinsic, intrinsic, sampledPts):
         self.bdComp = bdComp
         self.seqName = seqName
         self.rgbs_dict = rgbs_dict
         self.depths_dict = depths_dict
         self.sampledPts = sampledPts
-
+        self.imgSizeDict = imgSizeDict
+        self.tr_grid2oxtsDict = tr_grid2oxtsDict
+        self.imgPathDict = imgPathDict
+        self.tr_oxts2velo = tr_oxts2velo
+        self.extrinsic = extrinsic
+        self.intrinsic = intrinsic
 
 
 class videoSequence:
@@ -475,6 +481,9 @@ class GPURender:
 
         bdDict_rgb = dict()
         bdDict_depth = dict()
+        bdDict_imgSize = dict()
+        bdDict_trs_grid2oxts = dict()
+        bdDict_imgPath = dict()
         for i in range(np.size(bdComp.visibility)):
             if bdComp.visibility[i] == 1:
                 integratedImage, depthMap = renderAndSaveImage(data_reader, i, re, planeBdInsRectmp, 'null', self.func_integration, self.funcLinParamCal, self.func_IntersectLine,
@@ -486,10 +495,16 @@ class GPURender:
                 depth_ex = reSizeImg(depthMap_norm)
                 bdDict_rgb[i] = np.asarray(rgb_ex)
                 bdDict_depth[i] = np.asarray(depth_ex)
+                bdDict_imgSize[i] = data_reader.imageSize[i,:]
+                bdDict_trs_grid2oxts[i] = data_reader.trs_grid2oxts[i]
+                bdDict_imgPath[i] = data_reader.rgbFilePaths[i]
+
                 # rgb_ex.save(os.path.join(svPath, 'rgb_' + str(bdInd) + '_' + str(i)), "JPEG")
                 # depth_ex.save(os.path.join(svPath, 'depth_' + str(bdInd) + '_' + str(i)), "JPEG")
         sampledPts = samplePolygon(bdComp, 0.3)
-        bdCompEntity = singleBuildingComp(bdComp, data_reader.sequenceName, bdDict_rgb, bdDict_depth, sampledPts)
+        bdCompEntity = singleBuildingComp(bdComp, data_reader.sequenceName, bdDict_rgb, bdDict_depth, bdDict_imgSize,
+                                          bdDict_trs_grid2oxts, bdDict_imgPath, data_reader.tr_oxts2velo,
+                                          data_reader.extrinsic, data_reader.intrinsic, sampledPts)
         return bdCompEntity
 class tt_struct:
     def __init__(self):

@@ -7,7 +7,6 @@ from tensorboardX import SummaryWriter
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import videoSequenceProvider
 from PIL import Image
 import torch.optim as optim
 import os
@@ -15,14 +14,24 @@ import time
 import pickle
 import glob
 import random
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 
 class singleBuildingComp:
-    def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, sampledPts):
+    def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, imgSizeDict, tr_grid2oxtsDict, imgPathDict,
+                 tr_oxts2velo, extrinsic, intrinsic, sampledPts):
         self.bdComp = bdComp
         self.seqName = seqName
         self.rgbs_dict = rgbs_dict
         self.depths_dict = depths_dict
         self.sampledPts = sampledPts
+        self.imgSizeDict = imgSizeDict
+        self.tr_grid2oxtsDict = tr_grid2oxtsDict
+        self.imgPathDict = imgPathDict
+        self.tr_oxts2velo = tr_oxts2velo
+        self.extrinsic = extrinsic
+        self.intrinsic = intrinsic
 class pickleReader():
     def __init__(self, seqNameSet):
         self.seqNameSet = seqNameSet
@@ -83,19 +92,20 @@ class baselineModel:
         self.paramPredictor.load_state_dict(checkpoint['paramPredictor_state_dict'])
         self.visibilityPredictor.load_state_dict(checkpoint['visibilityPredictor_state_dict'])
 
-    def forward(self, videoSequence):
+    def forward(self, buildingEntity):
         imageTransforms = transforms.Compose([
             transforms.Normalize([0.485, 0.456, 0.406, 0.406], [0.229, 0.224, 0.225, 0.225])
         ])
-        lista = list(videoSequence.rgb.keys())
-        listb = list(videoSequence.depth.keys())
+        imgNum = len(buildingEntity.rgbs_dict)
+        lista = list(buildingEntity.rgbs_dict.keys())
+        listb = list(buildingEntity.depths_dict.keys())
         lstmInput = torch.zeros(len(lista),1,self.lstm_input).cuda()
-        if videoSequence.imgnum > self.maxLen:
-            toIndices = np.intc(np.round(np.linspace(0, videoSequence.imgnum-1, num=self.maxLen)))
+        if imgNum > self.maxLen:
+            toIndices = np.intc(np.round(np.linspace(0, imgNum-1, num=self.maxLen)))
         else:
-            toIndices = np.intc(np.round(np.linspace(0, videoSequence.imgnum-1, num=videoSequence.imgnum)))
+            toIndices = np.intc(np.round(np.linspace(0, imgNum-1, num=imgNum)))
         for i in toIndices:
-            concatonatexImg = torch.from_numpy(np.dstack((videoSequence.rgb[lista[i]], videoSequence.depth[listb[i]]))).permute(2,0,1).type(torch.FloatTensor) / torch.FloatTensor([255])
+            concatonatexImg = torch.from_numpy(np.dstack((buildingEntity.rgbs_dict[lista[i]], buildingEntity.depths_dict[listb[i]]))).permute(2,0,1).type(torch.FloatTensor) / torch.FloatTensor([255])
             concatonatexImg_normed = imageTransforms(concatonatexImg).unsqueeze(0).cuda()
             feature = self.pre_imageNet.forward(concatonatexImg_normed)
             lstmInput[i,0,:] = feature
@@ -107,15 +117,126 @@ class baselineModel:
         else:
             return None, None
 
-    def train(self, videoSequence):
-        paramPrediction, visiblityPrediction = self.forward(videoSequence)
+    def get3dPointLoss(self, sampledPts, transition, rotation, bdCenter):
+        CenterMvArr1 = torch.eye(4)
+        CenterMvArr1[0, 3] = -bdCenter[0]
+        CenterMvArr1[1, 3] = -bdCenter[1]
+        CenterMvArr1[2, 3] = -bdCenter[2]
+
+        CenterMvArr2 = torch.eye(4)
+        CenterMvArr2[0, 3] = bdCenter[0]
+        CenterMvArr2[1, 3] = bdCenter[1]
+        CenterMvArr2[2, 3] = bdCenter[2]
+
+        rot_tranArr = torch.eye(4)
+        rot_tranArr[0, 0] = torch.cos(rotation[2])
+        rot_tranArr[0, 1] = -torch.sin(rotation[2])
+        rot_tranArr[1, 0] = torch.sin(rotation[2])
+        rot_tranArr[1, 1] = torch.cos(rotation[2])
+
+        rot_tranArr[0, 3] = transition[0]
+        rot_tranArr[1, 3] = transition[1]
+        rot_tranArr[2, 3] = transition[2]
+
+        # rotatedPts = torch.t(torch.matmul(CenterMvArr2, torch.matmul(rot_tranArr, torch.matmul(CenterMvArr1, torch.t(sampledPts)))))
+        rotatedPts = torch.t(torch.matmul(torch.matmul(torch.matmul(CenterMvArr2, rot_tranArr), CenterMvArr1), torch.t(sampledPts)))
+        return rotatedPts
+
+
+    def trainLoss2d(self, buildingEntity):
+        paramPrediction, visiblityPrediction = self.forward(buildingEntity)
         if paramPrediction is not None:
-            tgtTrans = torch.from_numpy(videoSequence.gtTransition).cuda()
-            # tgtVisibility = torch.from_numpy(videoSequence.gtVisibility).cuda()
-            if videoSequence.isValid:
+            torchSampledPts = torch.from_numpy(buildingEntity.sampledPts).type(torch.float32)
+            transitionTorchGT = torch.from_numpy(buildingEntity.bdComp.transition).type(torch.float32)
+            transitionTorchEst = paramPrediction[0]
+            rotationTorch = torch.from_numpy(buildingEntity.bdComp.angles).type(torch.float32)
+            bdCenterTorch = torch.from_numpy(np.mean(buildingEntity.bdComp.botPolygon, axis = 0)).type(torch.float32)
+
+            pts3dGt = self.get3dPointLoss(torchSampledPts, transitionTorchGT, rotationTorch, bdCenterTorch)
+            pts3dEst = self.get3dPointLoss(torchSampledPts, transitionTorchEst, rotationTorch, bdCenterTorch)
+
+            tr_oxts2velo = torch.from_numpy(buildingEntity.tr_oxts2velo)
+            tr_grid2oxts = dict()
+
+            """
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            pts3dGt_numpy = pts3dGt.detach().numpy()
+            pts3dEst_numpy = pts3dEst.detach().numpy()
+            ax.scatter(pts3dGt_numpy[:,0], pts3dGt_numpy[:,1], pts3dGt_numpy[:,2], c='r')
+            ax.scatter(pts3dEst_numpy[:, 0], pts3dEst_numpy[:, 1], pts3dEst_numpy[:, 2], c='g')
+            fig.show()
+            """
+
+            """
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            pts3dGt_numpy = a.detach().numpy()
+            pts3dEst_numpy = b.detach().numpy()
+            ax.scatter(pts3dGt_numpy[:,0], pts3dGt_numpy[:,1], pts3dGt_numpy[:,2], c='r')
+            ax.scatter(pts3dEst_numpy[:, 0], pts3dEst_numpy[:, 1], pts3dEst_numpy[:, 2], c='g')
+            fig.show()
+            """
+            lossPt2d = torch.zeros(1)[0]
+            selectoraRec = dict()
+            selectorbRec = dict()
+            selectorRec = dict()
+            imgSizeRec = dict()
+            aRec = dict()
+            bRec = dict()
+            a_2d_pRec = dict()
+            b_2d_pRec = dict()
+            a_2dRec = dict()
+            b_2dRec = dict()
+            for idx in buildingEntity.rgbs_dict.keys():
+                tr_grid2oxts[idx] = (torch.from_numpy(buildingEntity.tr_grid2oxtsDict[idx]).type(torch.float32))
+                imgSize = torch.from_numpy(buildingEntity.imgSizeDict[idx])
+                a = torch.t(torch.matmul(torch.matmul(tr_oxts2velo, tr_grid2oxts[idx]), torch.t(pts3dGt)))
+                b = torch.t(torch.matmul(torch.matmul(tr_oxts2velo, tr_grid2oxts[idx]), torch.t(pts3dEst)))
+
+                a_2d_p = torch.t(torch.matmul(torch.matmul(torch.from_numpy(buildingEntity.intrinsic), torch.from_numpy(buildingEntity.extrinsic)), torch.t(a)))
+                a_2d = torch.zeros((a_2d_p.shape[0], a_2d_p.shape[1] - 1))
+                a_2d[:, 0] = a_2d_p[:, 0] / a_2d_p[:, 2]
+                a_2d[:, 1] = a_2d_p[:, 1] / a_2d_p[:, 2]
+                a_2d[:, 2] = a_2d_p[:, 2]
+                selectora = (a_2d[:,0] > 0) & (a_2d[:,0] < imgSize[1].type(torch.float32)) & (a_2d[:,1] > 0) & (a_2d[:,1] < imgSize[0].type(torch.float32)) & (a_2d[:, 2] > 0)
+
+
+                b_2d_p = torch.t(torch.matmul(torch.matmul(torch.from_numpy(buildingEntity.intrinsic), torch.from_numpy(buildingEntity.extrinsic)), torch.t(b)))
+                b_2d = torch.zeros((b_2d_p.shape[0], b_2d_p.shape[1] - 1))
+                b_2d[:, 0] = b_2d_p[:, 0] / b_2d_p[:, 2]
+                b_2d[:, 1] = b_2d_p[:, 1] / b_2d_p[:, 2]
+                b_2d[:, 2] = b_2d_p[:, 2]
+                selectorb = (b_2d[:,0] > 0) & (b_2d[:,0] < imgSize[1].type(torch.float32)) & (b_2d[:,1] > 0) & (b_2d[:,1] < imgSize[0].type(torch.float32)) & (b_2d[:, 2] > 0)
+                selector = (selectora & selectorb).type(torch.float32).unsqueeze(1).repeat(1, 3)
+
+                imgSizeRec[idx] = imgSize
+                aRec[idx] = a
+                bRec[idx] = b
+                a_2d_pRec[idx] = a_2d_p
+                b_2d_pRec[idx] = b_2d_p
+                a_2dRec[idx] = a_2d
+                b_2dRec[idx] = b_2d
+                selectoraRec[idx] = selectora
+                selectorbRec[idx] = selectorb
+                selectorRec[idx] = selector
+                lossPt2d = lossPt2d + torch.sum(((a_2d - b_2d) * selector).pow(2))
+            lossPt2d = lossPt2d / len(buildingEntity.rgbs_dict.keys())
+
+            """
+            img = mpimg.imread(buildingEntity.imgPathDict[idx])
+            imgplot = plt.imshow(img)
+            plt.axis([0, 1226, 370, 0])
+
+            plt.scatter(a_2d.detach().numpy()[:,0], a_2d.detach().numpy()[:,1], c='r')
+            plt.scatter(b_2d.detach().numpy()[:, 0], b_2d.detach().numpy()[:, 1], c='b')
+            """
+
+
+
+            if np.sum(buildingEntity.bdComp.visibility) > 0 and lossPt2d != 0:
                 self.optimizerTrans.zero_grad()
-                loss1 = torch.mean(torch.sqrt((tgtTrans - paramPrediction) * (tgtTrans - paramPrediction)))
-                loss1.backward(retain_graph=True)
+                lossPt2d.backward()
                 self.optimizerTrans.step()
             """
             self.optimizerVisibility.zero_grad()
@@ -124,31 +245,149 @@ class baselineModel:
             loss2.backward()
             self.optimizerVisibility.step()
             """
-            return loss1
+            return lossPt2d
         else:
             return -1
 
-    def test(self, videoSequence):
-        paramPrediction, visiblityPrediction = self.forward(videoSequence)
+    def trainLoss3d(self, buildingEntity):
+        paramPrediction, visiblityPrediction = self.forward(buildingEntity)
         if paramPrediction is not None:
-            tgtTrans = torch.from_numpy(videoSequence.gtTransition).cuda()
-            if videoSequence.isValid:
+            torchSampledPts = torch.from_numpy(buildingEntity.sampledPts).type(torch.float32)
+            transitionTorchGT = torch.from_numpy(buildingEntity.bdComp.transition).type(torch.float32)
+            transitionTorchEst = paramPrediction[0]
+            rotationTorch = torch.from_numpy(buildingEntity.bdComp.angles).type(torch.float32)
+            bdCenterTorch = torch.from_numpy(np.mean(buildingEntity.bdComp.botPolygon, axis = 0)).type(torch.float32)
+
+            pts3dGt = self.get3dPointLoss(torchSampledPts, transitionTorchGT, rotationTorch, bdCenterTorch)
+            pts3dEst = self.get3dPointLoss(torchSampledPts, transitionTorchEst, rotationTorch, bdCenterTorch)
+
+
+            """
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            pts3dGt_numpy = pts3dGt.detach().numpy()
+            pts3dEst_numpy = pts3dEst.detach().numpy()
+            ax.scatter(pts3dGt_numpy[:,0], pts3dGt_numpy[:,1], pts3dGt_numpy[:,2], c='r')
+            ax.scatter(pts3dEst_numpy[:, 0], pts3dEst_numpy[:, 1], pts3dEst_numpy[:, 2], c='g')
+            fig.show()
+            """
+
+            """
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            pts3dGt_numpy = a.detach().numpy()
+            pts3dEst_numpy = b.detach().numpy()
+            ax.scatter(pts3dGt_numpy[:,0], pts3dGt_numpy[:,1], pts3dGt_numpy[:,2], c='r')
+            ax.scatter(pts3dEst_numpy[:, 0], pts3dEst_numpy[:, 1], pts3dEst_numpy[:, 2], c='g')
+            fig.show()
+            """
+            lossPts3d = torch.sum((pts3dGt - pts3dEst).pow(2))
+
+            """
+            img = mpimg.imread(buildingEntity.imgPathDict[idx])
+            imgplot = plt.imshow(img)
+            plt.axis([0, 1226, 370, 0])
+
+            plt.scatter(a_2d.detach().numpy()[:,0], a_2d.detach().numpy()[:,1], c='r')
+            plt.scatter(b_2d.detach().numpy()[:, 0], b_2d.detach().numpy()[:, 1], c='b')
+            """
+
+
+
+            if np.sum(buildingEntity.bdComp.visibility) > 0:
+                self.optimizerTrans.zero_grad()
+                lossPts3d.backward()
+                self.optimizerTrans.step()
+            """
+            self.optimizerVisibility.zero_grad()
+            loss2 = torch.mean(torch.sqrt((tgtVisibility - visiblityPrediction) * (tgtVisibility - visiblityPrediction))) * torch.cuda.FloatTensor([100])
+            loss2_np = loss2.data.item()
+            loss2.backward()
+            self.optimizerVisibility.step()
+            """
+            return lossPts3d
+        else:
+            return -1
+
+    def test3d(self, buildingEntity):
+        paramPrediction, visiblityPrediction = self.forward(buildingEntity)
+        if paramPrediction is not None:
+            torchSampledPts = torch.from_numpy(buildingEntity.sampledPts).type(torch.float32)
+            transitionTorchGT = torch.from_numpy(buildingEntity.bdComp.transition).type(torch.float32)
+            transitionTorchEst = paramPrediction[0]
+            rotationTorch = torch.from_numpy(buildingEntity.bdComp.angles).type(torch.float32)
+            bdCenterTorch = torch.from_numpy(np.mean(buildingEntity.bdComp.botPolygon, axis = 0)).type(torch.float32)
+
+            pts3dGt = self.get3dPointLoss(torchSampledPts, transitionTorchGT, rotationTorch, bdCenterTorch)
+            pts3dEst = self.get3dPointLoss(torchSampledPts, transitionTorchEst, rotationTorch, bdCenterTorch)
+
+            lossPts3d = torch.sum((pts3dGt - pts3dEst).pow(2))
+            return lossPts3d
+        else:
+            return -1000000000
+
+    def test2d(self, buildingEntity):
+        paramPrediction, visiblityPrediction = self.forward(buildingEntity)
+        if paramPrediction is not None:
+            torchSampledPts = torch.from_numpy(buildingEntity.sampledPts).type(torch.float32)
+            transitionTorchGT = torch.from_numpy(buildingEntity.bdComp.transition).type(torch.float32)
+            transitionTorchEst = paramPrediction[0]
+            rotationTorch = torch.from_numpy(buildingEntity.bdComp.angles).type(torch.float32)
+            bdCenterTorch = torch.from_numpy(np.mean(buildingEntity.bdComp.botPolygon, axis = 0)).type(torch.float32)
+
+            pts3dGt = self.get3dPointLoss(torchSampledPts, transitionTorchGT, rotationTorch, bdCenterTorch)
+            pts3dEst = self.get3dPointLoss(torchSampledPts, transitionTorchEst, rotationTorch, bdCenterTorch)
+
+            tr_oxts2velo = torch.from_numpy(buildingEntity.tr_oxts2velo)
+            tr_grid2oxts = dict()
+
+            lossPt2d = torch.zeros(1)[0]
+
+
+
+            for idx in buildingEntity.rgbs_dict.keys():
+                tr_grid2oxts[idx] = (torch.from_numpy(buildingEntity.tr_grid2oxtsDict[idx]).type(torch.float32))
+                imgSize = torch.from_numpy(buildingEntity.imgSizeDict[idx])
+                a = torch.t(torch.matmul(torch.matmul(tr_oxts2velo, tr_grid2oxts[idx]), torch.t(pts3dGt)))
+                b = torch.t(torch.matmul(torch.matmul(tr_oxts2velo, tr_grid2oxts[idx]), torch.t(pts3dEst)))
+
+                a_2d_p = torch.t(torch.matmul(torch.matmul(torch.from_numpy(buildingEntity.intrinsic), torch.from_numpy(buildingEntity.extrinsic)), torch.t(a)))
+                a_2d = torch.zeros((a_2d_p.shape[0], a_2d_p.shape[1] - 1))
+                a_2d[:, 0] = a_2d_p[:, 0] / a_2d_p[:, 2]
+                a_2d[:, 1] = a_2d_p[:, 1] / a_2d_p[:, 2]
+                a_2d[:, 2] = a_2d_p[:, 2]
+                selectora = (a_2d[:,0] > 0) & (a_2d[:,0] < imgSize[1].type(torch.float32)) & (a_2d[:,1] > 0) & (a_2d[:,1] < imgSize[0].type(torch.float32)) & (a_2d[:, 2] > 0)
+
+
+                b_2d_p = torch.t(torch.matmul(torch.matmul(torch.from_numpy(buildingEntity.intrinsic), torch.from_numpy(buildingEntity.extrinsic)), torch.t(b)))
+                b_2d = torch.zeros((b_2d_p.shape[0], b_2d_p.shape[1] - 1))
+                b_2d[:, 0] = b_2d_p[:, 0] / b_2d_p[:, 2]
+                b_2d[:, 1] = b_2d_p[:, 1] / b_2d_p[:, 2]
+                b_2d[:, 2] = b_2d_p[:, 2]
+                selectorb = (b_2d[:,0] > 0) & (b_2d[:,0] < imgSize[1].type(torch.float32)) & (b_2d[:,1] > 0) & (b_2d[:,1] < imgSize[0].type(torch.float32))  & (b_2d[:, 2] > 0)
+                selector = (selectora & selectorb).type(torch.float32)
+
+                lossPt2d = lossPt2d + torch.sum(((a_2d - b_2d) * selector).pow(2))
+
+            lossPt2d = lossPt2d / len(buildingEntity.rgbs_dict.keys())
+            if np.sum(buildingEntity.bdComp.visibility) > 0 and lossPt2d != 0:
+                self.optimizerTrans.zero_grad()
+                lossPt2d.backward(retain_graph=True)
+                self.optimizerTrans.step()
+            return lossPt2d
+        else:
+            return -1000000000
+
+    def test(self, buildingEntity):
+        paramPrediction, visiblityPrediction = self.forward(buildingEntity)
+        if paramPrediction is not None:
+            tgtTrans = torch.from_numpy(buildingEntity.bdComp.transition).cuda()
+            if np.sum(buildingEntity.bdComp.visibility) > 0:
                 loss1 = torch.mean(
                     torch.sqrt((tgtTrans - paramPrediction) * (tgtTrans - paramPrediction)))
             return loss1
         else:
             return -100000
-
-
-class videoSequence:
-    def __init__(self, renderedRgb, renderedDepth, gtTransition, gtVisibility, isValid):
-        self.imgnum = len(renderedRgb)
-        self.rgb = renderedRgb
-        self.depth = renderedDepth
-        self.gtTransition = gtTransition
-        self.gtVisibility = gtVisibility
-        self.isValid = isValid
-
 
 allSeq = [
     '2011_09_30_drive_0018_sync',
@@ -172,20 +411,17 @@ for i in range(iterationTime):
     curTrainFilePath = trainComp[randInt]
     with open(curTrainFilePath, "rb") as input:
         bdcomp = pickle.load(input)
-        vds = videoSequence(bdcomp.rgbs_dict, bdcomp.depths_dict, bdcomp.bdComp.transition,
-                            bdcomp.bdComp.visibility, np.sum(bdcomp.bdComp.visibility) > 0)
-        lossVal = bsm.train(vds)
-        print("%dth iteration, loss is %f" % (i, lossVal))
-        writer.add_scalar('TrainLoss', lossVal, i)
-    if i % 200 == 199:
+        lossVal = bsm.trainLoss2d(bdcomp)
+        if lossVal > 0:
+            print("%dth iteration, loss is %f" % (i, lossVal))
+            writer.add_scalar('TrainLoss', lossVal, i)
+    if i % 200 == 0:
         testLossVals = list()
         for add in testComp:
             with open(add, "rb") as input:
                 bdcomp = pickle.load(input)
-                vds = videoSequence(bdcomp.rgbs_dict, bdcomp.depths_dict, bdcomp.bdComp.transition,
-                                    bdcomp.bdComp.visibility, np.sum(bdcomp.bdComp.visibility) > 0)
-                testLossVals.append(bsm.test(vds).cpu().detach().numpy())
-        print("TestLoss is %f" %  np.mean(testLossVals))
+                testLossVals.append(bsm.test(bdcomp).cpu().detach().numpy())
+        print("TestLoss is %f" % np.mean(testLossVals))
         writer.add_scalar('TestLoss', np.mean(testLossVals), i)
     if i % 500 == 499:
         bsm.sv(i)
