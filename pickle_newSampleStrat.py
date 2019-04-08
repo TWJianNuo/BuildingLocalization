@@ -17,12 +17,19 @@ import glob
 import random
 
 class singleBuildingComp:
-    def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, sampledPts):
+    def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, imgSizeDict, tr_grid2oxtsDict, imgPathDict,
+                 tr_oxts2velo, extrinsic, intrinsic, sampledPts):
         self.bdComp = bdComp
         self.seqName = seqName
         self.rgbs_dict = rgbs_dict
         self.depths_dict = depths_dict
         self.sampledPts = sampledPts
+        self.imgSizeDict = imgSizeDict
+        self.tr_grid2oxtsDict = tr_grid2oxtsDict
+        self.imgPathDict = imgPathDict
+        self.tr_oxts2velo = tr_oxts2velo
+        self.extrinsic = extrinsic
+        self.intrinsic = intrinsic
 class pickleReader():
     def __init__(self, seqNameSet):
         self.seqNameSet = seqNameSet
