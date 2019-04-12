@@ -348,10 +348,23 @@ class DataProvider:
             '2011_09_30_drive_0018_sync',
             '2011_09_26_drive_0096_sync',
             '2011_09_26_drive_0104_sync',
-            '2011_09_30_drive_0033_sync',
             '2011_09_26_drive_0117_sync',
+            '2011_09_30_drive_0033_sync',
             '2011_10_03_drive_0034_sync',
             '2011_10_03_drive_0027_sync',
+            '2011_09_30_drive_0028_sync',
+            '2011_09_26_drive_0019_sync',
+            '2011_09_26_drive_0020_sync',
+            '2011_09_26_drive_0022_sync',
+            '2011_09_26_drive_0023_sync',
+            '2011_09_26_drive_0035_sync',
+            '2011_09_26_drive_0036_sync',
+            '2011_09_26_drive_0039_sync',
+            '2011_09_26_drive_0046_sync',
+            '2011_09_26_drive_0061_sync',
+            '2011_09_26_drive_0064_sync',
+            '2011_09_26_drive_0079_sync',
+            '2011_09_26_drive_0086_sync',
         ]
         self.data_reader = dict()
         for sequence in sequenceName_set:
@@ -429,6 +442,21 @@ def reSizeImg(integratedImage):
     rgb_ex = ImageOps.expand(rgb, border=(0, padTop, 0, padBot), fill=0)
     # rgb_ex.show()
     return rgb_ex
+
+
+def reSizeImg_long(integratedImage):
+    desiredSize = np.intc(256)
+    charSampledImg = (integratedImage * 255).astype('uint8')
+    width = np.size(charSampledImg, 0)
+    length = np.size(charSampledImg, 1)
+    asLength = desiredSize
+    asWidth = np.intc(np.round(width / (length / asLength)))
+    rgb = Image.fromarray((integratedImage * 255).astype('uint8')).resize([asLength, asWidth], Image.ANTIALIAS)
+    # padTop = np.intc(np.round((desiredSize - asWidth) / 2))
+    # padBot = desiredSize - padTop - asWidth
+    # rgb_ex = ImageOps.expand(rgb, border=(0, padTop, 0, padBot), fill=0)
+    # rgb.show()
+    return rgb
 class singleBuildingComp:
     def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, imgSizeDict, tr_grid2oxtsDict, imgPathDict,
                  tr_oxts2velo, extrinsic, intrinsic, sampledPts):
@@ -506,22 +534,81 @@ class GPURender:
                                           bdDict_trs_grid2oxts, bdDict_imgPath, data_reader.tr_oxts2velo,
                                           data_reader.extrinsic, data_reader.intrinsic, sampledPts)
         return bdCompEntity
+
+
+    def renderSpecificBd_long(self, data_reader, bdInd):
+        bdComp = data_reader.buildingComp[bdInd]
+        valCount = 0
+        maxDepthDist = 130
+        svPath = os.path.join('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization', 'trainingDataVisualization')
+
+        curBotPolygon = data_reader.buildingComp[bdInd].botPolygon
+        curAngle = data_reader.buildingComp[bdInd].angles
+        curHeight = data_reader.buildingComp[bdInd].height
+        curTransition = data_reader.buildingComp[bdInd].transition
+        curTransition_zero = np.zeros_like(curTransition)
+        re, planeBdInsRectmp = getBdCompPlanePts(curBotPolygon, curAngle, curHeight, curTransition_zero,
+                                                 valCount)
+
+        bdDict_rgb = dict()
+        bdDict_depth = dict()
+        bdDict_imgSize = dict()
+        bdDict_trs_grid2oxts = dict()
+        bdDict_imgPath = dict()
+        for i in range(np.size(bdComp.visibility)):
+            if bdComp.visibility[i] == 1:
+                integratedImage, depthMap = renderAndSaveImage(data_reader, i, re, planeBdInsRectmp, 'null', self.func_integration, self.funcLinParamCal, self.func_IntersectLine,
+                                                 self.funcLineAff, self.func_computeNewBbox, self.func_depthRender, self.func_lineRender,
+                                                 self.func_pointCheck, self.func_acceleratedFormPolygons)
+                depthMap_norm = depthMap / maxDepthDist
+                depthMap_norm[depthMap_norm>1] = 0
+                rgb_ex = reSizeImg_long(integratedImage)
+                depth_ex = reSizeImg_long(depthMap_norm)
+                bdDict_rgb[i] = np.asarray(rgb_ex)
+                bdDict_depth[i] = np.asarray(depth_ex)
+                bdDict_imgSize[i] = data_reader.imageSize[i,:]
+                bdDict_trs_grid2oxts[i] = data_reader.trs_grid2oxts[i]
+                bdDict_imgPath[i] = data_reader.rgbFilePaths[i]
+
+                # rgb_ex.save(os.path.join(svPath, 'rgb_' + str(bdInd) + '_' + str(i)), "JPEG")
+                # depth_ex.save(os.path.join(svPath, 'depth_' + str(bdInd) + '_' + str(i)), "JPEG")
+        sampledPts = samplePolygon(bdComp, 0.3)
+        bdCompEntity = singleBuildingComp(bdComp, data_reader.sequenceName, bdDict_rgb, bdDict_depth, bdDict_imgSize,
+                                          bdDict_trs_grid2oxts, bdDict_imgPath, data_reader.tr_oxts2velo,
+                                          data_reader.extrinsic, data_reader.intrinsic, sampledPts)
+        return bdCompEntity
 class tt_struct:
     def __init__(self):
         self.allSeq = [
             '2011_09_30_drive_0018_sync',
             '2011_09_26_drive_0096_sync',
             '2011_09_26_drive_0104_sync',
-            '2011_09_30_drive_0033_sync',
             '2011_09_26_drive_0117_sync',
+            '2011_09_30_drive_0033_sync',
             '2011_10_03_drive_0034_sync',
             '2011_10_03_drive_0027_sync',
+            '2011_09_30_drive_0028_sync',
+            '2011_09_26_drive_0019_sync',
+            '2011_09_26_drive_0020_sync',
+            '2011_09_26_drive_0022_sync',
+            '2011_09_26_drive_0023_sync',
+            '2011_09_26_drive_0035_sync',
+            '2011_09_26_drive_0036_sync',
+            '2011_09_26_drive_0039_sync',
+            '2011_09_26_drive_0046_sync',
+            '2011_09_26_drive_0061_sync',
+            '2011_09_26_drive_0064_sync',
+            '2011_09_26_drive_0079_sync',
+            '2011_09_26_drive_0086_sync',
         ]
         self.dataprovider = pickle.load(open("/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/savedDataProvider/dataprovider.p", "rb"))
         self.gpurender = GPURender()
+        for seq in self.allSeq:
+            tempReader = self.dataprovider.getReader(seq)
+            print(seq)
 
     def generatePickle(self):
-        pathPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData'
+        pathPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData_ex'
         for seq in self.allSeq:
             seqSvPath = os.path.join(pathPrefix, seq)
             try:
@@ -537,10 +624,24 @@ class tt_struct:
                     print("%dth Bd finished" % bdCompIdx)
 
 
-
+    def generatePickle_long(self):
+        pathPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData_ex'
+        for seq in self.allSeq:
+            seqSvPath = os.path.join(pathPrefix, seq)
+            try:
+                os.mkdir(seqSvPath)
+            except OSError:
+                pass
+            tmpDataReader = self.dataprovider.getReader(seq)
+            for bdCompIdx in tmpDataReader.buildingComp:
+                curBd = self.gpurender.renderSpecificBd_long(tmpDataReader, bdCompIdx)
+                if len(curBd.rgbs_dict) > 0:
+                    pickle.dump(curBd, open(
+                        os.path.join(seqSvPath, str(bdCompIdx) + ".p"),"wb"))
+                    print("%dth Bd finished" % bdCompIdx)
 
 
 
 
 tt = tt_struct()
-tt.generatePickle()
+tt.generatePickle_long()

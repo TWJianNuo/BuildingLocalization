@@ -49,6 +49,25 @@ class pickleReader():
         self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.8)]
         self.testPortion = self.totPathRec[int(len(self.totPathRec) * 0.8):]
 
+        savedDataSplitFilePath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit'
+        if os.path.isdir(savedDataSplitFilePath) == False:
+            try:
+                os.mkdir(savedDataSplitFilePath)
+            except OSError:
+                print("Creation of the directory %s failed" % savedDataSplitFilePath)
+            else:
+                print("Successfully created the directory %s " % savedDataSplitFilePath)
+        if os.path.isfile('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p') == False:
+            tmpdict = dict()
+            tmpdict['train'] = self.tranPortion
+            tmpdict['test'] = self.testPortion
+            pickle.dump(tmpdict, open("/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p", "wb"))
+        else:
+            tmpdict = pickle.load(open("/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p", "rb"))
+            self.tranPortion = tmpdict['train']
+            self.testPortion = tmpdict['test']
+            for idx in self.testPortion:
+                print(idx)
 class baselineModel:
     def __init__(self) -> object:
         super(baselineModel, self).__init__()
@@ -72,8 +91,8 @@ class baselineModel:
         self.paramPredictor = nn.Sequential(nn.Linear(self.lstm_hidden, self.lstm_hidden), nn.ReLU(), nn.Linear(self.lstm_hidden, 3), nn.Sigmoid()).cuda()
         self.visibilityPredictor = nn.Sequential(nn.Linear(self.lstm_hidden, self.lstm_hidden), nn.ReLU(), nn.Linear(self.lstm_hidden, 1)).cuda()
 
-        self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(self.paramPredictor.parameters()), lr=0.01)
-        self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.01)
+        self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(self.paramPredictor.parameters()), lr=0.001)
+        self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.001)
         self.svPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/svModel'
         self.maxLen = 10
     def sv(self, idt):
@@ -83,6 +102,20 @@ class baselineModel:
             'paramPredictor_state_dict': self.paramPredictor.state_dict(),
             'visibilityPredictor_state_dict': self.visibilityPredictor.state_dict(),
         }, os.path.join(self.svPath, str(idt)))
+    def initSv(self):
+        torch.save({
+            'pre_imageNet_state_dict': self.pre_imageNet.state_dict(),
+            'LSTM_state_dict': self.LSTM.state_dict(),
+            'paramPredictor_state_dict': self.paramPredictor.state_dict(),
+            'visibilityPredictor_state_dict': self.visibilityPredictor.state_dict(),
+        }, os.path.join('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/initedModel', str(0)))
+
+    def initLoad(self):
+        checkpoint = torch.load(os.path.join('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/initedModel', str(0)))
+        self.pre_imageNet.load_state_dict(checkpoint['pre_imageNet_state_dict'])
+        self.LSTM.load_state_dict(checkpoint['LSTM_state_dict'])
+        self.paramPredictor.load_state_dict(checkpoint['paramPredictor_state_dict'])
+        self.visibilityPredictor.load_state_dict(checkpoint['visibilityPredictor_state_dict'])
     def load(self, idt):
         checkpoint = torch.load(os.path.join(self.svPath, str(idt)))
         self.pre_imageNet.load_state_dict(checkpoint['pre_imageNet_state_dict'])
@@ -96,16 +129,16 @@ class baselineModel:
         ])
         lista = list(videoSequence.rgb.keys())
         listb = list(videoSequence.depth.keys())
-        lstmInput = torch.zeros(len(lista),1,self.lstm_input).cuda()
         if videoSequence.imgnum > self.maxLen:
             toIndices = np.intc(np.round(np.linspace(0, videoSequence.imgnum-1, num=self.maxLen)))
         else:
             toIndices = np.intc(np.round(np.linspace(0, videoSequence.imgnum-1, num=videoSequence.imgnum)))
-        for i in toIndices:
+        lstmInput = torch.zeros(len(toIndices), 1, self.lstm_input).cuda()
+        for idx, i in enumerate(toIndices):
             concatonatexImg = torch.from_numpy(np.dstack((videoSequence.rgb[lista[i]], videoSequence.depth[listb[i]]))).permute(2,0,1).type(torch.FloatTensor) / torch.FloatTensor([255])
             concatonatexImg_normed = imageTransforms(concatonatexImg).unsqueeze(0).cuda()
             feature = self.pre_imageNet.forward(concatonatexImg_normed)
-            lstmInput[i,0,:] = feature
+            lstmInput[idx,0,:] = feature
         if torch.sum(torch.isnan(lstmInput)) == 0:
             lstmOutput, oth = self.LSTM.forward(lstmInput)
             paramPrediction = (self.paramPredictor(lstmOutput[-1,:,:]) - 0.5) * 16
@@ -122,6 +155,26 @@ class baselineModel:
             if videoSequence.isValid:
                 self.optimizerTrans.zero_grad()
                 loss1 = torch.mean(torch.sqrt((tgtTrans - paramPrediction) * (tgtTrans - paramPrediction)))
+                loss1.backward(retain_graph=True)
+                self.optimizerTrans.step()
+            """
+            self.optimizerVisibility.zero_grad()
+            loss2 = torch.mean(torch.sqrt((tgtVisibility - visiblityPrediction) * (tgtVisibility - visiblityPrediction))) * torch.cuda.FloatTensor([100])
+            loss2_np = loss2.data.item()
+            loss2.backward()
+            self.optimizerVisibility.step()
+            """
+            return loss1
+        else:
+            return -1
+    def train_l2(self, videoSequence):
+        paramPrediction, visiblityPrediction = self.forward(videoSequence)
+        if paramPrediction is not None:
+            tgtTrans = torch.from_numpy(videoSequence.gtTransition).cuda()
+            # tgtVisibility = torch.from_numpy(videoSequence.gtVisibility).cuda()
+            if videoSequence.isValid:
+                self.optimizerTrans.zero_grad()
+                loss1 = torch.mean((tgtTrans - paramPrediction).pow(2))
                 loss1.backward(retain_graph=True)
                 self.optimizerTrans.step()
             """
@@ -161,19 +214,37 @@ allSeq = [
     '2011_09_30_drive_0018_sync',
     '2011_09_26_drive_0096_sync',
     '2011_09_26_drive_0104_sync',
-    '2011_09_30_drive_0033_sync',
     '2011_09_26_drive_0117_sync',
+    '2011_09_30_drive_0033_sync',
     '2011_10_03_drive_0034_sync',
     '2011_10_03_drive_0027_sync',
+    '2011_09_30_drive_0028_sync',
+    '2011_09_26_drive_0019_sync',
+    '2011_09_26_drive_0020_sync',
+    '2011_09_26_drive_0022_sync',
+    '2011_09_26_drive_0023_sync',
+    '2011_09_26_drive_0035_sync',
+    '2011_09_26_drive_0036_sync',
+    '2011_09_26_drive_0039_sync',
+    '2011_09_26_drive_0046_sync',
+    '2011_09_26_drive_0061_sync',
+    '2011_09_26_drive_0064_sync',
+    '2011_09_26_drive_0079_sync',
+    '2011_09_26_drive_0086_sync',
 ]
 pkr = pickleReader(allSeq)
 bsm = baselineModel()
 fixedFrameNum = 5
-iterationTime = 100000
+iterationTime = 100000000
 
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
-writer = SummaryWriter()
+
+if os.path.isfile('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/initedModel/0') == False:
+    bsm.initSv()
+else:
+    bsm.initLoad()
+writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2')
 for i in range(iterationTime):
     randInt = random.randint(0, len(trainComp) - 1)
     curTrainFilePath = trainComp[randInt]
@@ -181,10 +252,10 @@ for i in range(iterationTime):
         bdcomp = pickle.load(input)
         vds = videoSequence(bdcomp.rgbs_dict, bdcomp.depths_dict, bdcomp.bdComp.transition,
                             bdcomp.bdComp.visibility, np.sum(bdcomp.bdComp.visibility) > 0)
-        lossVal = bsm.train(vds)
+        lossVal = bsm.train_l2(vds)
         print("%dth iteration, loss is %f" % (i, lossVal))
         writer.add_scalar('TrainLoss', lossVal, i)
-    if i % 200 == 199:
+    if i % 200 == 0:
         testLossVals = list()
         for add in testComp:
             with open(add, "rb") as input:
@@ -192,7 +263,7 @@ for i in range(iterationTime):
                 vds = videoSequence(bdcomp.rgbs_dict, bdcomp.depths_dict, bdcomp.bdComp.transition,
                                     bdcomp.bdComp.visibility, np.sum(bdcomp.bdComp.visibility) > 0)
                 testLossVals.append(bsm.test(vds).cpu().detach().numpy())
-        print("TestLoss is %f" %  np.mean(testLossVals))
+        print("TestLoss is %f, valid entry is %d" %  (np.mean(testLossVals), len(testLossVals)))
         writer.add_scalar('TestLoss', np.mean(testLossVals), i)
     if i % 500 == 499:
         bsm.sv(i)

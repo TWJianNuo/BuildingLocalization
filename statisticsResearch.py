@@ -496,8 +496,23 @@ class tt_struct:
             '2011_09_30_drive_0018_sync',
             '2011_09_26_drive_0096_sync',
             '2011_09_26_drive_0104_sync',
-            '2011_09_30_drive_0033_sync',
             '2011_09_26_drive_0117_sync',
+            '2011_09_30_drive_0033_sync',
+            '2011_10_03_drive_0034_sync',
+            '2011_10_03_drive_0027_sync',
+            '2011_09_30_drive_0028_sync',
+            '2011_09_26_drive_0019_sync',
+            '2011_09_26_drive_0020_sync',
+            '2011_09_26_drive_0022_sync',
+            '2011_09_26_drive_0023_sync',
+            '2011_09_26_drive_0035_sync',
+            '2011_09_26_drive_0036_sync',
+            '2011_09_26_drive_0039_sync',
+            '2011_09_26_drive_0046_sync',
+            '2011_09_26_drive_0061_sync',
+            '2011_09_26_drive_0064_sync',
+            '2011_09_26_drive_0079_sync',
+            '2011_09_26_drive_0086_sync',
         ]
         self.dataprovider = pickle.load(open("/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/savedDataProvider/dataprovider.p", "rb"))
         self.gpurender = GPURender()
@@ -508,25 +523,51 @@ class tt_struct:
         zTransList = list()
         degList = list()
         heightList = list()
+        totBdNum = 0
         for seq in self.allSeq:
             tmpReader = self.dataprovider.getReader(seq)
             for idx in tmpReader.buildingComp:
                 comp = tmpReader.buildingComp[idx]
+                totBdNum = totBdNum + 1
                 if np.sum(comp.visibility) > 0:
                     xTransList.append(comp.transition[0])
                     yTransList.append(comp.transition[1])
                     zTransList.append(comp.transition[2])
-                    degList.append(comp.angles[2] / 3.14 * 180)
+                    degList.append(np.round(comp.angles[2] / 3.1415926 * 180 / 0.5))
                     heightList.append(comp.height)
         xTrans = np.array(xTransList)
         yTrans = np.array(yTransList)
         zTrans = np.array(zTransList)
         deg = np.array(degList)
+        deg_rec = deg / 3.1415926 * 180
         height = np.array(heightList)
 
-        print(np.mean(xTrans) + np.mean(yTrans) + np.mean(zTrans))
+        print(np.mean(np.abs(xTrans)) + np.mean(np.abs(yTrans)) + np.mean(np.abs(zTrans)))
         plt.figure()
-        plt.stem(xTrans)
+        plt.hist(xTrans, bins=30)
+        plt.title("Transition on x(meter)")
+        plt.savefig('xTrans.png')
+
+        plt.figure()
+        plt.hist(yTrans, bins=30)
+        plt.title("Transition on y(meter)")
+        plt.savefig('yTrans.png')
+
+        plt.figure()
+        plt.hist(zTrans, bins=30)
+        plt.title("Transition on z(meter)")
+        plt.savefig('zTrans.png')
+
+        plt.figure()
+        plt.hist(height, bins=30)
+        plt.title("Height(meter)")
+        plt.savefig('height.png')
+
+        plt.figure()
+        plt.hist(deg, bins=30)
+        plt.title("Degrees")
+        plt.savefig('degree.png')
+
         plt.show()
 
         plt.figure()
