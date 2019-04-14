@@ -39,7 +39,8 @@ class singleBuildingComp:
 class pickleReader():
     def __init__(self, seqNameSet):
         self.seqNameSet = seqNameSet
-        self.rootPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData'
+        self.generalPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization'
+        self.rootPath = os.path.join(self.generalPrefix, 'trainingData')
         self.bdEntry = dict()
         self.validIndices = dict()
         self.invalidIndices = dict()
@@ -55,7 +56,7 @@ class pickleReader():
         self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.8)]
         self.testPortion = self.totPathRec[int(len(self.totPathRec) * 0.8):]
 
-        savedDataSplitFilePath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit'
+        savedDataSplitFilePath = os.path.join(self.generalPrefix, 'dataSplit')
         if os.path.isdir(savedDataSplitFilePath) == False:
             try:
                 os.mkdir(savedDataSplitFilePath)
@@ -64,16 +65,16 @@ class pickleReader():
             else:
                 print("Successfully created the directory %s " % savedDataSplitFilePath)
         if os.path.isfile(
-                '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p') == False:
+                os.path.join(self.generalPrefix, 'dataSplit/dataSplit.p')) == False:
             tmpdict = dict()
             tmpdict['train'] = self.tranPortion
             tmpdict['test'] = self.testPortion
             pickle.dump(tmpdict, open(
-                "/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p",
+                os.path.join(self.generalPrefix, 'dataSplit/dataSplit.p'),
                 "wb"))
         else:
             tmpdict = pickle.load(open(
-                "/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p",
+                os.path.join(self.generalPrefix, 'dataSplit/dataSplit.p'),
                 "rb"))
             self.tranPortion = tmpdict['train']
             self.testPortion = tmpdict['test']
