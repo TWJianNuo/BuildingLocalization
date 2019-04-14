@@ -94,7 +94,7 @@ class baselineModel:
         self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(self.paramPredictor.parameters()), lr=0.001)
         self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.001)
         self.svPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/svModel'
-        self.maxLen = 10
+        self.maxLen = 300
     def sv(self, idt):
         torch.save({
             'pre_imageNet_state_dict': self.pre_imageNet.state_dict(),
@@ -244,7 +244,7 @@ if os.path.isfile('/media/shengjie/other/KITTI_scene_understanding/python_code/B
     bsm.initSv()
 else:
     bsm.initLoad()
-writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2')
+writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2_maxLen200')
 for i in range(iterationTime):
     randInt = random.randint(0, len(trainComp) - 1)
     curTrainFilePath = trainComp[randInt]
