@@ -18,6 +18,7 @@ import convolution_lstm
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+os.environ['CUDA_VISIBLE_DEVICES']='0'
 
 
 class singleBuildingComp:
@@ -157,7 +158,7 @@ class baselineModel:
 
 
         self.optimizerTrans = optim.SGD(list(self.vggPretrain.parameters()) + list(self.conLstm.parameters()) + list(
-            self.paramPredictor.parameters()) + list(self.paramFinalPred.parameters()), lr=0.0001)
+            self.paramPredictor.parameters()) + list(self.paramFinalPred.parameters()), lr=0.01)
         self.svPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/svModel'
         self.maxLen = 10
 

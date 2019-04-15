@@ -541,8 +541,6 @@ def renderSeperateFrameAndSaveImage(data_reader, renderIndex, triPlane, planeBdI
     cuda.memcpy_dtoh(g, g_gpu)
     cuda.memcpy_dtoh(b, b_gpu)
     cuda.memcpy_dtoh(depthMap, imgMask_gpu)
-    r[r > 0] = 255
-    g[g > 0] = 255
     integratedImage = np.stack((r, g, b), axis=2)
 
     # rgb_toSv = Image.fromarray((integratedImage * 255).astype('uint8'))
@@ -552,7 +550,7 @@ def renderSeperateFrameAndSaveImage(data_reader, renderIndex, triPlane, planeBdI
     #     depthMap = depthMap / np.max(depthMap)
     # depthMap_toSv = Image.fromarray((depthMap * 255).astype('uint8'))
     # depthMap_toSv.save(svPath + "/depth" + str(renderIndex), "JPEG")
-    return integratedImage, depthMap
+    return integratedImage, depthMap, image
 
 
 
@@ -656,7 +654,12 @@ def reSizeImg(integratedImage):
     rgb_ex = ImageOps.expand(rgb, border=(0, padTop, 0, padBot), fill=0)
     # rgb_ex.show()
     return rgb_ex
-
+def reSizeImg_irAR(integratedImage):
+    asLength = 256
+    asWidth = 256
+    rgb = Image.fromarray((integratedImage * 255).astype('uint8')).resize([asLength, asWidth], Image.ANTIALIAS)
+    # rgb_ex.show()
+    return rgb
 
 def reSizeImg_long(integratedImage):
     desiredSize = np.intc(256)
@@ -726,17 +729,20 @@ class GPURender:
         bdDict_imgSize = dict()
         bdDict_trs_grid2oxts = dict()
         bdDict_imgPath = dict()
+        # bdDict_orgRGB = dict()
         for i in range(np.size(bdComp.visibility)):
             if bdComp.visibility[i] == 1:
-                integratedImage, depthMap = renderSeperateFrameAndSaveImage(data_reader, i, re, planeBdInsRectmp, 'null', self.func_integration, self.funcLinParamCal, self.func_IntersectLine,
+                integratedImage, depthMap, imageRGB = renderSeperateFrameAndSaveImage(data_reader, i, re, planeBdInsRectmp, 'null', self.func_integration, self.funcLinParamCal, self.func_IntersectLine,
                                                  self.funcLineAff, self.func_computeNewBbox, self.func_depthRender, self.func_lineRender,
                                                  self.func_pointCheck, self.func_acceleratedFormPolygons)
                 depthMap_norm = depthMap / maxDepthDist
                 depthMap_norm[depthMap_norm>1] = 0
-                rgb_ex = reSizeImg(integratedImage)
-                depth_ex = reSizeImg(depthMap_norm)
-                bdDict_rgb[i] = np.asarray(rgb_ex)
+                # rgb_ex = reSizeImg_irAR(integratedImage)
+                depth_ex = reSizeImg_irAR(depthMap_norm)
+                imageRGB_ex = reSizeImg_irAR(imageRGB)
+                bdDict_rgb[i] = np.asarray(imageRGB_ex)
                 bdDict_depth[i] = np.asarray(depth_ex)
+                # bdDict_orgRGB[i] = np.asarray(imageRGB_ex)
                 bdDict_imgSize[i] = data_reader.imageSize[i,:]
                 bdDict_trs_grid2oxts[i] = data_reader.trs_grid2oxts[i]
                 bdDict_imgPath[i] = data_reader.rgbFilePaths[i]
@@ -916,8 +922,24 @@ class tt_struct:
                         os.path.join(seqSvPath, str(bdCompIdx) + ".p"),"wb"))
                     print("%dth Bd finished" % bdCompIdx)
 
+    def generatePickle_seperateFrame(self):
+        pathPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData_seperateFrame'
+        for seq in self.allSeq:
+            seqSvPath = os.path.join(pathPrefix, seq)
+            try:
+                os.mkdir(seqSvPath)
+            except OSError:
+                pass
+            tmpDataReader = self.dataprovider.getReader(seq)
+            for bdCompIdx in tmpDataReader.buildingComp:
+                curBd = self.gpurender.renderSpecificBd_seperateFrameChannel(tmpDataReader, bdCompIdx)
+                if len(curBd.rgbs_dict) > 0:
+                    pickle.dump(curBd, open(
+                        os.path.join(seqSvPath, str(bdCompIdx) + ".p"),"wb"))
+                    print("%dth Bd finished" % bdCompIdx)
 
+# Render Frame with additional channel
+# tt = tt_struct()
+# tt.generatePickle_seperateFrame()
 
-
-tt = tt_struct()
-tt.generatePickle_rgb()
+# Render Frames acquiring warped frames

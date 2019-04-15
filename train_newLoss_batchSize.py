@@ -17,7 +17,7 @@ import random
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-
+os.environ['CUDA_VISIBLE_DEVICES']='0'
 
 class singleBuildingComp:
     def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, imgSizeDict, tr_grid2oxtsDict, imgPathDict,
@@ -36,9 +36,10 @@ class singleBuildingComp:
 
 
 class pickleReader():
-    def __init__(self, seqNameSet):
+    def __init__(self, seqNameSet, generalPrefix):
         self.seqNameSet = seqNameSet
-        self.rootPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData'
+        self.generalPrefix = generalPrefix
+        self.rootPath = os.path.join(self.generalPrefix, '/trainingData_seperateFrame')
         self.bdEntry = dict()
         self.validIndices = dict()
         self.invalidIndices = dict()
@@ -54,7 +55,7 @@ class pickleReader():
         self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.8)]
         self.testPortion = self.totPathRec[int(len(self.totPathRec) * 0.8):]
 
-        savedDataSplitFilePath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit'
+        savedDataSplitFilePath = os.path.join(self.generalPrefix, 'dataSplit')
         if os.path.isdir(savedDataSplitFilePath) == False:
             try:
                 os.mkdir(savedDataSplitFilePath)
@@ -63,25 +64,29 @@ class pickleReader():
             else:
                 print("Successfully created the directory %s " % savedDataSplitFilePath)
         if os.path.isfile(
-                '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p') == False:
+                os.path.join(self.generalPrefix, 'dataSplit/dataSplit.p')) == False:
             tmpdict = dict()
             tmpdict['train'] = self.tranPortion
             tmpdict['test'] = self.testPortion
             pickle.dump(tmpdict, open(
-                "/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p",
+                os.path.join(self.generalPrefix, "dataSplit/dataSplit.p"),
                 "wb"))
         else:
             tmpdict = pickle.load(open(
-                "/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p",
+                os.path.join(self.generalPrefix, "dataSplit/dataSplit.p"),
                 "rb"))
             self.tranPortion = tmpdict['train']
             self.testPortion = tmpdict['test']
-            for idx in self.testPortion:
-                print(idx)
+            for idx, tmpName in enumerate(self.testPortion):
+                comp = tmpName.split('/')
+                self.testPortion[idx] = os.path.join(self.generalPrefix, comp[-3], comp[-2], comp[-1])
 
+            for idx, tmpName in enumerate(self.tranPortion):
+                comp = tmpName.split('/')
+                self.tranPortion[idx] = os.path.join(self.generalPrefix, comp[-3], comp[-2], comp[-1])
 
 class baselineModel:
-    def __init__(self, batchSize) -> object:
+    def __init__(self, batchSize, generalPrefix) -> object:
         super(baselineModel, self).__init__()
         self.pre_imageNet = models.alexnet(pretrained=True)
         new_convLayer = nn.Conv2d(4, 64, kernel_size=(11, 11), stride=(4, 4), padding=(2, 2))
@@ -110,12 +115,13 @@ class baselineModel:
         # self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(
         #     self.paramPredictor.parameters()), lr=0.0000000001)
         self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(
-            self.paramPredictor.parameters()), lr=0.000001)
-        self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.0000001)
-        self.svPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/svModel'
+            self.paramPredictor.parameters()), lr=0.001)
+        self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.001)
+        self.generalPrefix = generalPrefix
+        self.svPath = os.path.join(self.generalPrefix, 'svModel')
         self.maxLen = 10
         self.imageTransforms = transforms.Compose([
-            transforms.Normalize([0.485, 0.456, 0.406, 0.406], [0.229, 0.224, 0.225, 0.225])
+            transforms.Normalize([0.485, 0.456, 0.406, 0], [0.229, 0.224, 0.225, 1])
         ])
 
     def sv(self, idt):
@@ -176,12 +182,12 @@ class baselineModel:
             'LSTM_state_dict': self.LSTM.state_dict(),
             'paramPredictor_state_dict': self.paramPredictor.state_dict(),
             'visibilityPredictor_state_dict': self.visibilityPredictor.state_dict(),
-        }, os.path.join('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/initedModel',
+        }, os.path.join(self.generalPrefix, 'initedModel',
                         str(0)))
 
     def initLoad(self):
         checkpoint = torch.load(
-            os.path.join('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/initedModel',
+            os.path.join(self.generalPrefix, 'initedModel',
                          str(0)))
         self.pre_imageNet.load_state_dict(checkpoint['pre_imageNet_state_dict'])
         self.LSTM.load_state_dict(checkpoint['LSTM_state_dict'])
@@ -482,9 +488,10 @@ allSeq = [
     '2011_09_26_drive_0079_sync',
     '2011_09_26_drive_0086_sync',
 ]
+generalPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization'
 batchSize = 32
-pkr = pickleReader(allSeq)
-bsm = baselineModel(batchSize)
+pkr = pickleReader(allSeq, generalPrefix)
+bsm = baselineModel(batchSize, generalPrefix)
 fixedFrameNum = 5
 iterationTime = 100000
 
@@ -492,12 +499,12 @@ testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
 if os.path.isfile(
-        '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/initedModel/0') == False:
+        os.path.join(generalPrefix, 'initedModel/0')) == False:
     bsm.initSv()
 else:
     bsm.initLoad()
-
-writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/logLoss2d_ex_fixedInit_batchSize32')
+# bsm.load(1999)
+writer = SummaryWriter(os.path.join(generalPrefix, 'runs/logLoss2d_ex_fixedInit_batchSize32_lr100_2'))
 for i in range(iterationTime):
     bdCompInputList = list()
     for k in range(batchSize):
