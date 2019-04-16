@@ -34,6 +34,7 @@ class pickleReader():
     def __init__(self, seqNameSet):
         self.seqNameSet = seqNameSet
         self.rootPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData'
+        self.generalPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization'
         self.bdEntry = dict()
         self.validIndices = dict()
         self.invalidIndices= dict()
@@ -66,8 +67,13 @@ class pickleReader():
             tmpdict = pickle.load(open("/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/dataSplit/dataSplit.p", "rb"))
             self.tranPortion = tmpdict['train']
             self.testPortion = tmpdict['test']
-            for idx in self.testPortion:
-                print(idx)
+            for idx, tmpName in enumerate(self.testPortion):
+                comp = tmpName.split('/')
+                self.testPortion[idx] = os.path.join(self.generalPrefix, 'trainingData_seperateFrame', comp[-2], comp[-1])
+
+            for idx, tmpName in enumerate(self.tranPortion):
+                comp = tmpName.split('/')
+                self.tranPortion[idx] = os.path.join(self.generalPrefix, 'trainingData_seperateFrame', comp[-2], comp[-1])
 class baselineModel:
     def __init__(self) -> object:
         super(baselineModel, self).__init__()
@@ -94,7 +100,7 @@ class baselineModel:
         self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(self.paramPredictor.parameters()), lr=0.001)
         self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.001)
         self.svPath = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/svModel'
-        self.maxLen = 300
+        self.maxLen = 10
     def sv(self, idt):
         torch.save({
             'pre_imageNet_state_dict': self.pre_imageNet.state_dict(),
@@ -244,7 +250,7 @@ if os.path.isfile('/media/shengjie/other/KITTI_scene_understanding/python_code/B
     bsm.initSv()
 else:
     bsm.initLoad()
-writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2_maxLen200')
+writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2_seperateFrame')
 for i in range(iterationTime):
     randInt = random.randint(0, len(trainComp) - 1)
     curTrainFilePath = trainComp[randInt]

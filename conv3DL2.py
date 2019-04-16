@@ -17,7 +17,9 @@ import random
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-os.environ['CUDA_VISIBLE_DEVICES']='0'
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 
 class singleBuildingComp:
     def __init__(self, bdComp, seqName, rgbs_dict, depths_dict, imgSizeDict, tr_grid2oxtsDict, imgPathDict,
@@ -85,36 +87,58 @@ class pickleReader():
                 comp = tmpName.split('/')
                 self.tranPortion[idx] = os.path.join(self.generalPrefix, 'trainingData_seperateFrame', comp[-2], comp[-1])
 
+
 class baselineModel:
     def __init__(self, batchSize, generalPrefix) -> object:
         super(baselineModel, self).__init__()
-        self.pre_imageNet = models.alexnet(pretrained=True)
-        new_convLayer = nn.Conv2d(4, 64, kernel_size=(11, 11), stride=(4, 4), padding=(2, 2))
-        nn.init.xavier_uniform(new_convLayer.weight)
-        new_convLayer.weight[:, 0:3, :, :] = self.pre_imageNet.features[0].weight
-        new_convLayer.weight = nn.Parameter(new_convLayer.weight)
-        feature_layerList = list(self.pre_imageNet.features.children())
-        feature_layerList[0] = new_convLayer
-        self.pre_imageNet.features = nn.Sequential(*feature_layerList)
-        self.batchSize = batchSize
+        pre_imageNet = models.alexnet(pretrained=True)
+        self.frameNum = 10
+        self.alexFeatures = nn.Sequential(
+            nn.Conv2d(4, 64, kernel_size=11, stride=4, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        count = 0
+        for idx, l in enumerate(list(self.alexFeatures)):
+            if isinstance(l, nn.Conv2d):
+                if count == 0:
+                    l.weight[:,0:3,:,:].data = pre_imageNet.features[count].weight.data.clone()
+                    nn.init.xavier_uniform_(l.weight[:,3,:,:])
+                else:
+                    l.weight.data = pre_imageNet.features[count].weight.clone()
+            count = count + 1
+        self.alexFeatures.cuda()
 
-        classifier_layerList = list(self.pre_imageNet.classifier.children())[:-1]
-        self.pre_imageNet.classifier = nn.Sequential(*classifier_layerList)
-        self.pre_imageNet.cuda()
 
-        self.lstm_input = 4096
-        self.lstm_hidden = int(4096 / 4)
-        self.LSTM = nn.LSTM(self.lstm_input, self.lstm_hidden)
-        self.LSTM.cuda()
-        self.paramPredictor = nn.Sequential(nn.Linear(self.lstm_hidden, self.lstm_hidden), nn.ReLU(),
-                                            nn.Linear(self.lstm_hidden, 3), nn.Sigmoid()).cuda()
-        self.visibilityPredictor = nn.Sequential(nn.Linear(self.lstm_hidden, self.lstm_hidden), nn.ReLU(),
-                                                 nn.Linear(self.lstm_hidden, 1)).cuda()
-
-        # self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(self.paramPredictor.parameters()), lr=0.0000001)
-        # self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(
-        #     self.paramPredictor.parameters()), lr=0.0000000001)
-        self.optimizerTrans = optim.SGD(list(self.pre_imageNet.parameters()) + list(self.LSTM.parameters()) + list(
+        self.conv3dpart = nn.Sequential(
+            nn.Conv3d(256, 128, kernel_size=(3, 3, 3), stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(128, 64, kernel_size=(3, 3, 3), stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(64, 32, kernel_size=(3, 3, 3), stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(32, 16, kernel_size=(3, 3, 3), stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv3d(16, 1, kernel_size=(3, 3, 3), stride=1, padding=1),
+            nn.ReLU(inplace=True),
+        ).cuda()
+        self.paramPredictor_prepaer = nn.Sequential(
+            nn.Conv2d(10, 1, kernel_size=1, stride=1),
+            nn.ReLU(inplace=True),
+        ).cuda()
+        self.paramPredictor = nn.Sequential(nn.Linear(49, 49), nn.ReLU(),
+                                            nn.Linear(49, 3), nn.Sigmoid()).cuda()
+        self.optimizerTrans = optim.SGD(list(self.alexFeatures.parameters()) + list(
             self.paramPredictor.parameters()), lr=0.001)
         self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.001)
         self.generalPrefix = generalPrefix
@@ -139,10 +163,10 @@ class baselineModel:
         self.paramPredictor.load_state_dict(checkpoint['paramPredictor_state_dict'])
         self.visibilityPredictor.load_state_dict(checkpoint['visibilityPredictor_state_dict'])
 
-
     def forward(self, buildingEntityList):
         lstmOutputList = list()
         validList = list()
+        input3dtot_list = list()
         for buildingEntity in buildingEntityList:
             imgNum = len(buildingEntity.rgbs_dict)
             lista = list(buildingEntity.rgbs_dict.keys())
@@ -151,27 +175,24 @@ class baselineModel:
                 toIndices = np.intc(np.round(np.linspace(0, imgNum - 1, num=self.maxLen)))
             else:
                 toIndices = np.intc(np.round(np.linspace(0, imgNum - 1, num=imgNum)))
-            stackedInputImagesList = list()
+            stackedInputImages = torch.zeros([self.frameNum, 4, 256, 256]).cuda()
             for idx, i in enumerate(toIndices):
                 concatonatexImg = torch.from_numpy(
                     np.dstack((buildingEntity.rgbs_dict[lista[i]], buildingEntity.depths_dict[listb[i]]))).permute(2, 0,
                                                                                                                    1).type(
                     torch.FloatTensor) / torch.FloatTensor([255])
-                stackedInputImagesList.append(self.imageTransforms(concatonatexImg).unsqueeze(0))
-            stackedInputImages = torch.cat(stackedInputImagesList, dim=0).cuda()
-            lstmInput = self.pre_imageNet(stackedInputImages)
-            lstmInput_unqueezed = lstmInput.unsqueeze(dim=1)
-            if torch.sum(torch.isnan(lstmInput_unqueezed)) == 0:
+                stackedInputImages[idx, :, :, :] = self.imageTransforms(concatonatexImg).unsqueeze(0)
+            input3d = self.alexFeatures(stackedInputImages).permute(1,0,2,3).unsqueeze(0)
+            if torch.sum(torch.isnan(input3d)) == 0:
                 validList.append(1)
-                lstmOutput, oth = self.LSTM.forward(lstmInput_unqueezed)
-                lstmOutput_val = lstmOutput[-1,:,:]
-                lstmOutputList.append(lstmOutput_val.unsqueeze(0))
+                input3dtot_list.append(input3d)
             else:
                 validList.append(0)
-        if len(lstmOutputList) > 0:
-            lstmOutput = torch.cat(lstmOutputList, dim = 0)
-            intemRe1 = self.paramPredictor(lstmOutput)
-            paramPrediction = (intemRe1 - 0.5) * 16
+        input3dtot = torch.cat(input3dtot_list, 0)
+        if input3dtot.shape[0] > 0:
+            con3dOut = self.conv3dpart(input3dtot).squeeze(1)
+            intemRe1 = self.paramPredictor_prepaer(con3dOut).squeeze(1).view(32,-1)
+            paramPrediction = (self.paramPredictor(intemRe1) - 0.5) * 16
             return paramPrediction, validList
         else:
             return None, None
@@ -278,7 +299,7 @@ class baselineModel:
                 a_2d[:, 1] = a_2d_p[:, 1] / a_2d_p[:, 2]
                 a_2d[:, 2] = a_2d_p[:, 2]
                 selectora = (a_2d[:, 0] > 0) & (a_2d[:, 0] < imgSize[1].type(torch.float32)) & (a_2d[:, 1] > 0) & (
-                            a_2d[:, 1] < imgSize[0].type(torch.float32)) & (a_2d[:, 2] > 0)
+                        a_2d[:, 1] < imgSize[0].type(torch.float32)) & (a_2d[:, 2] > 0)
 
                 b_2d_p = torch.t(torch.matmul(torch.matmul(torch.from_numpy(buildingEntity.intrinsic),
                                                            torch.from_numpy(buildingEntity.extrinsic)), torch.t(b)))
@@ -287,7 +308,7 @@ class baselineModel:
                 b_2d[:, 1] = b_2d_p[:, 1] / b_2d_p[:, 2]
                 b_2d[:, 2] = b_2d_p[:, 2]
                 selectorb = (b_2d[:, 0] > 0) & (b_2d[:, 0] < imgSize[1].type(torch.float32)) & (b_2d[:, 1] > 0) & (
-                            b_2d[:, 1] < imgSize[0].type(torch.float32)) & (b_2d[:, 2] > 0)
+                        b_2d[:, 1] < imgSize[0].type(torch.float32)) & (b_2d[:, 2] > 0)
                 selector = (selectora & selectorb).type(torch.float32).unsqueeze(1).repeat(1, 3)
 
                 imgSizeRec[idx] = imgSize
@@ -396,7 +417,7 @@ class baselineModel:
                     a_2d[:, 1] = a_2d_p[:, 1] / a_2d_p[:, 2]
                     a_2d[:, 2] = a_2d_p[:, 2]
                     selectora = (a_2d[:, 0] > 0) & (a_2d[:, 0] < imgSize[1].type(torch.float32)) & (a_2d[:, 1] > 0) & (
-                                a_2d[:, 1] < imgSize[0].type(torch.float32)) & (a_2d[:, 2] > 0)
+                            a_2d[:, 1] < imgSize[0].type(torch.float32)) & (a_2d[:, 2] > 0)
 
                     b_2d_p = torch.t(torch.matmul(torch.matmul(torch.from_numpy(buildingEntity.intrinsic),
                                                                torch.from_numpy(buildingEntity.extrinsic)), torch.t(b)))
@@ -405,7 +426,7 @@ class baselineModel:
                     b_2d[:, 1] = b_2d_p[:, 1] / b_2d_p[:, 2]
                     b_2d[:, 2] = b_2d_p[:, 2]
                     selectorb = (b_2d[:, 0] > 0) & (b_2d[:, 0] < imgSize[1].type(torch.float32)) & (b_2d[:, 1] > 0) & (
-                                b_2d[:, 1] < imgSize[0].type(torch.float32)) & (b_2d[:, 2] > 0)
+                            b_2d[:, 1] < imgSize[0].type(torch.float32)) & (b_2d[:, 2] > 0)
                     selector = (selectora & selectorb).type(torch.float32).unsqueeze(1).repeat(1, 3)
 
                     imgSizeRec[idx] = imgSize
@@ -425,10 +446,10 @@ class baselineModel:
                 img = mpimg.imread(buildingEntity.imgPathDict[idx])
                 imgplot = plt.imshow(img)
                 plt.axis([0, 1226, 370, 0])
-    
+
                 plt.scatter(a_2d.detach().numpy()[:,0], a_2d.detach().numpy()[:,1], c='r')
                 plt.scatter(b_2d.detach().numpy()[:, 0], b_2d.detach().numpy()[:, 1], c='b')
-    
+
                 imgs = list(buildingEntity.rgbs_dict.values())
                 imgplot = plt.imshow(imgs[0])
                 """
@@ -448,7 +469,6 @@ class baselineModel:
             return lossPt2dSum
         else:
             return -1
-
 
     def test(self, buildingEntityList):
         paramPrediction, validList = self.forward(buildingEntityList)
@@ -498,13 +518,8 @@ iterationTime = 100000
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
-if os.path.isfile(
-        os.path.join(generalPrefix, 'initedModel/0')) == False:
-    bsm.initSv()
-else:
-    bsm.initLoad()
 # bsm.load(1999)
-# writer = SummaryWriter(os.path.join(generalPrefix, 'runs/logLoss2d_ex_fixedInit_batchSize32_lr100_2'))
+writer = SummaryWriter(os.path.join(generalPrefix, 'runs/logLoss2d_conv3d'))
 for i in range(iterationTime):
     bdCompInputList = list()
     for k in range(batchSize):
@@ -516,7 +531,7 @@ for i in range(iterationTime):
     lossVal = bsm.trainLosslog2d(bdCompInputList)
     if lossVal is not None:
         print("%dth iteration, loss is %f" % (i, lossVal))
-        # writer.add_scalar('TrainLoss', lossVal, i)
+        writer.add_scalar('TrainLoss', lossVal, i)
     if i % 200 == 0:
         testLossVals = list()
         for add in testComp:
@@ -528,6 +543,6 @@ for i in range(iterationTime):
         print("TestLoss is %f" % np.mean(testLossVals))
         if np.mean(testLossVals) > 0:
             a = 1
-            # writer.add_scalar('TestLoss', np.mean(testLossVals), i)
+            writer.add_scalar('TestLoss', np.mean(testLossVals), i)
     if i % 500 == 499:
         bsm.sv(i)
