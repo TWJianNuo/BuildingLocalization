@@ -41,7 +41,8 @@ class pickleReader():
     def __init__(self, seqNameSet, generalPrefix):
         self.seqNameSet = seqNameSet
         self.generalPrefix = generalPrefix
-        self.rootPath = os.path.join(self.generalPrefix, '/trainingData_seperateFrame')
+        self.dataSetLoc = 'trainingData_seperateFrame'
+        self.rootPath = os.path.join(self.generalPrefix, self.dataSetLoc)
         self.bdEntry = dict()
         self.validIndices = dict()
         self.invalidIndices = dict()
@@ -81,11 +82,11 @@ class pickleReader():
             self.testPortion = tmpdict['test']
             for idx, tmpName in enumerate(self.testPortion):
                 comp = tmpName.split('/')
-                self.testPortion[idx] = os.path.join(self.generalPrefix, 'trainingData_seperateFrame', comp[-2], comp[-1])
+                self.testPortion[idx] = os.path.join(self.generalPrefix, self.dataSetLoc, comp[-2], comp[-1])
 
             for idx, tmpName in enumerate(self.tranPortion):
                 comp = tmpName.split('/')
-                self.tranPortion[idx] = os.path.join(self.generalPrefix, 'trainingData_seperateFrame', comp[-2], comp[-1])
+                self.tranPortion[idx] = os.path.join(self.generalPrefix, self.dataSetLoc, comp[-2], comp[-1])
 
 
 class baselineModel:
@@ -138,9 +139,18 @@ class baselineModel:
         ).cuda()
         self.paramPredictor = nn.Sequential(nn.Linear(49, 49), nn.ReLU(),
                                             nn.Linear(49, 3), nn.Sigmoid()).cuda()
-        self.optimizerTrans = optim.SGD(list(self.alexFeatures.parameters()) + list(
-            self.paramPredictor.parameters()), lr=0.001)
-        self.optimizerVisibility = optim.SGD(self.visibilityPredictor.parameters(), lr=0.001)
+        self.optimizerTrans = optim.SGD(list(self.alexFeatures.parameters()) + list(self.conv3dpart.parameters()) + list(
+            self.paramPredictor.parameters()) + list(self.paramPredictor_prepaer.parameters()), lr=0.001)
+        for l in list(self.conv3dpart.parameters()):
+            if isinstance(l, nn.Conv3d):
+                nn.init.xavier_uniform_(l)
+        for l in list(self.paramPredictor_prepaer.parameters()):
+            if isinstance(l, nn.Conv2d) or isinstance(l, nn.Linear):
+                nn.init.xavier_uniform_(l)
+        for l in list(self.paramPredictor.parameters()):
+            if isinstance(l, nn.Conv2d) or isinstance(l, nn.Linear):
+                nn.init.xavier_uniform_(l)
+
         self.generalPrefix = generalPrefix
         self.svPath = os.path.join(self.generalPrefix, 'svModel')
         self.maxLen = 10
@@ -191,7 +201,7 @@ class baselineModel:
         input3dtot = torch.cat(input3dtot_list, 0)
         if input3dtot.shape[0] > 0:
             con3dOut = self.conv3dpart(input3dtot).squeeze(1)
-            intemRe1 = self.paramPredictor_prepaer(con3dOut).squeeze(1).view(32,-1)
+            intemRe1 = self.paramPredictor_prepaer(con3dOut).squeeze(1).view(con3dOut.shape[0],-1)
             paramPrediction = (self.paramPredictor(intemRe1) - 0.5) * 16
             return paramPrediction, validList
         else:
@@ -365,7 +375,7 @@ class baselineModel:
                 count = count + 1
                 torchSampledPts = torch.from_numpy(buildingEntity.sampledPts).type(torch.float32)
                 transitionTorchGT = torch.from_numpy(buildingEntity.bdComp.transition).type(torch.float32)
-                transitionTorchEst = paramPrediction[0]
+                transitionTorchEst = paramPrediction
                 rotationTorch = torch.from_numpy(buildingEntity.bdComp.angles).type(torch.float32)
                 bdCenterTorch = torch.from_numpy(np.mean(buildingEntity.bdComp.botPolygon, axis=0)).type(torch.float32)
 
@@ -519,7 +529,7 @@ testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
 # bsm.load(1999)
-writer = SummaryWriter(os.path.join(generalPrefix, 'runs/logLoss2d_conv3d'))
+# writer = SummaryWriter(os.path.join(generalPrefix, 'runs/logLoss2d_conv3d'))
 for i in range(iterationTime):
     bdCompInputList = list()
     for k in range(batchSize):
@@ -531,7 +541,7 @@ for i in range(iterationTime):
     lossVal = bsm.trainLosslog2d(bdCompInputList)
     if lossVal is not None:
         print("%dth iteration, loss is %f" % (i, lossVal))
-        writer.add_scalar('TrainLoss', lossVal, i)
+        # writer.add_scalar('TrainLoss', lossVal, i)
     if i % 200 == 0:
         testLossVals = list()
         for add in testComp:
@@ -543,6 +553,6 @@ for i in range(iterationTime):
         print("TestLoss is %f" % np.mean(testLossVals))
         if np.mean(testLossVals) > 0:
             a = 1
-            writer.add_scalar('TestLoss', np.mean(testLossVals), i)
+            # writer.add_scalar('TestLoss', np.mean(testLossVals), i)
     if i % 500 == 499:
         bsm.sv(i)
