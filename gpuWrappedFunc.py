@@ -832,6 +832,424 @@ def wrapAccleratedFormPolygons():
     return func
 
 
+
+def wrapDepthAndPlaneIndcsRender():
+    mod = SourceModule("""
+        #include <stdio.h>
+        __global__ void doublify(int* numOfPlanes, float* aMinv, int* imageSize, float* mappedStartPoint, float* mappedEndPoint, int* bbBox, int* planesValidity, float*line2dParam, int* lineValidity, float* imgMask, int* planeBdInsRec, int* planeCoveredRec, int* depthPlaneIdRec)
+        {
+            int blockId = blockIdx.x + blockIdx.y * gridDim.x;
+            int idx = blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
+            float largNum = 3.4e10;
+            for(int i = idx; i < imageSize[0] * imageSize[1]; i += gridDim.x * gridDim.y * blockDim.x * blockDim.y){
+                int imgy = i / imageSize[1];
+                int imgx = i - imgy * imageSize[1];
+                // if ((imgy == 187) && (imgx == 450)){
+                float imgyf = imgy;
+                float imgxf = imgx;
+                //if((imgy == 182) && (imgx == 591)){
+                for(int k = 0; k < *numOfPlanes; k++){
+                    if(planesValidity[k] != 0){
+                        int bboxBaseInd = k * 4;
+                        if ( (imgx >= bbBox[bboxBaseInd + 0]) && (imgx <= bbBox[bboxBaseInd + 1]) && (imgy >= bbBox[bboxBaseInd + 2]) && (imgy <= bbBox[bboxBaseInd + 3]) ){
+                            int baseLineidx = k * 5;
+                            int intersectionNum = 0;
+                            // float minDepth = 1e10;
+                            for(int p = 0; p < 5; p++){
+                                if(lineValidity[baseLineidx + p] != -1){
+                                    float t1 = mappedStartPoint[k * 4 * 5 + p * 4 + 1];
+                                    float t2 = mappedEndPoint[k * 4 * 5 + p * 4 + 1];
+                                    if (abs(t1 - round(t1)) < 1e-5){
+                                        t1 = t1 + 1e-5;
+                                    }
+                                    if (abs(t2 - round(t2)) < 1e-5){
+                                        t2 = t2 + 1e-5;
+                                    }
+                                    bool jud1 = (t1 - imgyf) * (t2 - imgyf) < 0;
+                                    // bool jud1 = (mappedStartPoint[k * 4 * 5 + p * 4 + 1] - imgyf) * (mappedEndPoint[k * 4 * 5 + p * 4 + 1] - imgyf) < 0;
+                                    // bool jud1p1 = ((mappedStartPoint[k * 4 * 5 + p * 4 + 1] - imgyf) > -1e-15) && ((mappedEndPoint[k * 4 * 5 + p * 4 + 1] - imgyf) < 1e-15);
+                                    // bool jud1p2 = ((mappedStartPoint[k * 4 * 5 + p * 4 + 1] - imgyf) < 1e-15) && ((mappedEndPoint[k * 4 * 5 + p * 4 + 1] - imgyf) > -1e-15);
+                                    // bool jud1p1 = ((mappedStartPoint[k * 4 * 5 + p * 4 + 1] - imgyf) > 0) && ((mappedEndPoint[k * 4 * 5 + p * 4 + 1] - imgyf) < 0);
+                                    // bool jud1p2 = ((mappedStartPoint[k * 4 * 5 + p * 4 + 1] - imgyf) < 0) && ((mappedEndPoint[k * 4 * 5 + p * 4 + 1] - imgyf) > 0);
+                                    // bool jud1 = jud1p1 || jud1p2;
+                                    // if((k == 12) && (p == 0)){
+                                    //     printf("p is %d, jud1 is %d, val1 is %f, val2 is %.22f\\n", p, jud1, (mappedStartPoint[k * 4 * 5 + p * 4 + 1] - imgyf), (mappedEndPoint[k * 4 * 5 + p * 4 + 1] - imgyf));
+                                    // }
+                                    bool jud2 = false;
+                                    float tempVal1 = imgxf * line2dParam[k * 5 * 3 + p * 3 + 0] + imgyf * line2dParam[k * 5 * 3 + p * 3 + 1] + line2dParam[k * 5 * 3 + p * 3 + 2];
+                                    float tempVal2 = largNum * line2dParam[k * 5 * 3 + p * 3 + 0] + imgyf * line2dParam[k * 5 * 3 + p * 3 + 1] + line2dParam[k * 5 * 3 + p * 3 + 2];
+                                    if (((tempVal1 > 0) && (tempVal2 < 0)) || ((tempVal1 < 0) && (tempVal2 > 0))){
+                                        jud2 = true;
+                                    }
+                                    if(jud1 && jud2){
+                                        intersectionNum += 1;
+                                        // if(k == 12){
+                                        //     printf("Cross the %dth line.\\n", p);
+                                        // }
+                                    }
+                                }
+                            }
+                            if (intersectionNum % 2 == 1){
+                                planeCoveredRec[planeBdInsRec[k]] = 1;
+                                int pPind = k * 4;
+                                // printf("PlaneInd is: %d\\n", k);
+                                float p = (aMinv[pPind + 0] * imgxf + aMinv[pPind + 1] * imgyf + aMinv[pPind + 2]);
+                                float depth = - (aMinv[pPind + 3] / p);
+                                // printf("depthVal:%f, \\t, val1:%f\\n", depth, (aMinv[pPind + 0] * imgxf + aMinv[pPind + 1] * imgyf + aMinv[pPind + 2]) );
+                                if (depth > 0){
+                                    if (imgMask[i] > depth){
+                                        imgMask[i] = depth;
+                                        depthPlaneIdRec[i] = k;
+                                    }
+                                }
+                                else{
+                                    // printf("Warning, negative depth value calculated.\\n");
+                                }
+                            }
+                        }
+                    } 
+                }
+                //}
+                //}
+            }
+        }
+    """)
+    func = mod.get_function("doublify")
+    return func
+
+def wrapPlaneFlatIndRecGen():
+    mod = SourceModule("""
+        #include <stdio.h>
+        __global__ void doublify(int* planeFlatIndRec, int* bdMappedPosRec, int* numPlane, int* flatRecSize)
+        {
+            int blockId = blockIdx.x + blockIdx.y * gridDim.x;
+            int idx = blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
+            int maxPixelNum = flatRecSize[0] * flatRecSize[1];
+            // printf("maxPixelNum: %d\\n", maxPixelNum);
+            for(int i = idx; i < maxPixelNum; i += gridDim.x * gridDim.y * blockDim.x * blockDim.y){
+                int yind = i / flatRecSize[1];
+                int xind = i - yind * flatRecSize[1];
+                int rec = 0;
+                for(int j = 0; j < *numPlane; j++){
+                    if((xind >= bdMappedPosRec[j * 2 + 0]) && (xind < bdMappedPosRec[j * 2 + 1])){
+                        planeFlatIndRec[i] = j;
+                        rec = 1;
+                        break;
+                    }
+                }
+                if (rec == 0){
+                    printf("Something wrong, xind is: %d, yind is: %d, palneNum is %d\\n", xind, yind, *numPlane);
+                }
+            }
+        }
+    """)
+    func = mod.get_function("doublify")
+    return func
+
+def wrapReconstructed3DPtsGen():
+    mod = SourceModule("""
+        #include <stdio.h>
+        __global__ void doublify(float* reconstructed3DPts, int* reconstructed3DPtsindsRec, int* planeFlatIndRec, int* arrSize, float* new2oldAffsArr)
+        {
+            int blockId = blockIdx.x + blockIdx.y * gridDim.x;
+            int idx = blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
+            int maxPixelNum = arrSize[0] * arrSize[1];
+            // if (idx == 0){
+            // for(int k = 0; k < 64; k++){
+            //     printf("%d, ", planeFlatIndRec[k]);
+            // }
+            // printf("\\n");
+            for(int i = idx; i < maxPixelNum; i += gridDim.x * gridDim.y * blockDim.x * blockDim.y){
+                int xind = i / arrSize[0];
+                int yind = i - xind * arrSize[0];
+                // printf("yind: %d\\n", yind);
+                // printf("xind: %d\\n", xind);
+                // printf("indRec: %d\\n", planeFlatIndRec[yind * arrSize[1] + xind]);
+                reconstructed3DPtsindsRec[i] = planeFlatIndRec[yind * arrSize[1] + xind];
+                float newPts[4];
+                float oldPts[4];
+                newPts[0] = (float)xind;
+                newPts[1] = (float)yind;
+                newPts[2] = (float)0;
+                newPts[3] = (float)1;
+                int baseIdx = planeFlatIndRec[yind * arrSize[1] + xind] * 4 * 4;
+                for(int m = 0; m < 4; m++){
+                    oldPts[m] = 0;
+                    for(int n = 0; n < 4; n++){
+                        oldPts[m] += new2oldAffsArr[baseIdx + m * 4 + n] * newPts[n];
+                    }
+                }
+                /*
+                if (i == 16384){
+                    for(int m = 0; m < 4; m++){
+                        printf("Aff: ");
+                        for(int n = 0; n < 4; n++){
+                            printf("%f, ", new2oldAffsArr[baseIdx + m * 4 + n]);
+                        }
+                        printf("\\n");
+                    }
+                    printf("NewPts: ");
+                    for(int n = 0; n < 4; n++){
+                        printf("%f, ", newPts[n]);
+                    }
+                    printf("\\n");
+                }
+                */
+                for(int m = 0; m < 4; m++){
+                    reconstructed3DPts[i * 4 + m] = oldPts[m];
+                }
+            }
+            // }
+        }
+    """)
+    func = mod.get_function("doublify")
+    return func
+
+def wrapRenderSideView():
+    mod = SourceModule("""
+        #include <stdio.h>
+        __global__ void doublify(float* reconstructed3DPts, int* reconstructed3DPtsindsRec, int* planeIndsRecorder, float* projectM, int* arrSize, int* imgSize, float* outr, float* outg, float* outb, float* r, float* g, float* b)
+        {
+            
+            int blockId = blockIdx.x + blockIdx.y * gridDim.x;
+            int idx = blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
+            int maxPixelNum = arrSize[0] * arrSize[1];
+            int searchRange = 7;
+            for(int i = idx; i < maxPixelNum; i += gridDim.x * gridDim.y * blockDim.x * blockDim.y){
+            // if(i == 4){
+                float tempPts[4];
+                float projectedPts[4];
+                float normalizedPts[3];
+                for(int j = 0; j < 4; j++){
+                    tempPts[j] = reconstructed3DPts[i * 4 + j];
+                }
+                for(int m = 0; m < 4; m++){
+                    projectedPts[m] = 0;
+                    for(int n = 0; n < 4; n++){
+                        projectedPts[m] += projectM[m * 4 + n] * tempPts[n];
+                    }
+                }
+                normalizedPts[0] = projectedPts[0] / projectedPts[2];
+                normalizedPts[1] = projectedPts[1] / projectedPts[2];
+                normalizedPts[2] = projectedPts[2];
+                int cx = (int)floor(normalizedPts[0]);
+                int cy = (int)floor(normalizedPts[1]);
+                
+                /*
+                printf("Aff: \\n");
+                for(int m = 0; m < 4; m++){
+                    for(int n = 0; n < 4; n++){
+                        printf("%f, ", projectM[m * 4 + n]);
+                    }
+                    printf("\\n");
+                }
+                printf("\\n\\n\\n");
+                */
+                
+                // printf("normalizedPts: %f, %f, %f\\n", normalizedPts[0], normalizedPts[1], normalizedPts[2]);
+                // printf("ceiledX, ceiledX: %d, %d\\n", cx, cy);
+                // printf("logic Re: %d\\n", (cx >= 0) && (cx < imgSize[1]) && (cy >= 0) && (cy < imgSize[0]) && (normalizedPts[2] > 0) && (planeIndsRecorder[cy * imgSize[1] + cx] == reconstructed3DPtsindsRec[i]));
+                
+                if ((cx >= 0) && (cx < imgSize[1]) && (cy >= 0) && (cy < imgSize[0]) && (normalizedPts[2] > 0)){
+                    int testRe = 0;
+                    /*
+                    if (planeIndsRecorder[tcy * imgSize[1] + tcx] == reconstructed3DPtsindsRec[i]){
+                        testRe = 1;
+                    }
+                    */
+                    for(int p = -(searchRange/2); p < searchRange/2; p++){
+                        for(int q = -(searchRange/2); q < searchRange/2; q++){
+                            int iix = p + cx;
+                            int iiy = q + cy;
+                            if ((iix >= 0) && (iix < imgSize[1]) && (iiy >= 0) && (iiy < imgSize[0])){
+                                if (planeIndsRecorder[iiy * imgSize[1] + iix] == reconstructed3DPtsindsRec[i]){
+                                    testRe = 1;
+                                }
+                            }
+                        }
+                    }
+                    /*
+                    if (tcy > 0){
+                        if (planeIndsRecorder[(tcy-1) * imgSize[1] + tcx] == reconstructed3DPtsindsRec[i]){
+                            testRe = 1;
+                        }
+                    }
+                    if (tcy < imgSize[0]-1){
+                        if (planeIndsRecorder[(tcy+1) * imgSize[1] + tcx] == reconstructed3DPtsindsRec[i]){
+                            testRe = 1;
+                        }
+                    }
+                    if (tcx > 0){
+                        if (planeIndsRecorder[tcy * imgSize[1] + tcx - 1] == reconstructed3DPtsindsRec[i]){
+                            testRe = 1;
+                        }
+                    }
+                    if (tcx < imgSize[1]-1){
+                        if (planeIndsRecorder[tcy * imgSize[1] + tcx + 1] == reconstructed3DPtsindsRec[i]){
+                            testRe = 1;
+                        }
+                    }
+                    */
+                    if(testRe == 1){
+                        if ((cx != imgSize[1]) && (cy != imgSize[0])){
+                            int idxLL = cx + cy * imgSize[1];
+                            int idxLH = cx + (cy+1) * imgSize[1];
+                            int idxRL = (cx + 1) + cy * imgSize[1];
+                            int idxRH = (cx + 1) + (cy+1) * imgSize[1];
+                            
+                            
+                            int xind = i / arrSize[0];
+                            int yind = i - xind * arrSize[0];
+                            int linInd = yind * arrSize[1] + xind;
+                            
+                            float paraml = (float) (cx + 1) - normalizedPts[0];
+                            float paramr = 1 - paraml;
+                            float paramL = (float) (cy + 1) - normalizedPts[1];
+                            float paramH = 1 - paramL;
+                            float rvL = paraml * r[idxLL] + paramr * r[idxRL];
+                            float rvH = paraml * r[idxLH] + paramr * r[idxRH];
+                            outr[linInd] = paramL * rvL + paramH * rvH;
+                            float gvL = paraml * g[idxLL] + paramr * g[idxRL];
+                            float gvH = paraml * g[idxLH] + paramr * g[idxRH];
+                            outg[linInd] = paramL * gvL + paramH * gvH;
+                            float bvL = paraml * b[idxLL] + paramr * b[idxRL];
+                            float bvH = paraml * b[idxLH] + paramr * b[idxRH];
+                            outb[linInd] = paramL * bvL + paramH * bvH;
+                            // printf("re: %f, %f, %f\\n", outr[idxLL], outg[idxLL], outb[idxLL]);
+                            // printf("index : %d, cx: %d, cy : %d\\n", idxLL, cx, cy);
+                            // printf("imgSizex : %d, imgSizey: %d\\n", imgSize[0], imgSize[1]);
+                            // printf("linInd: %d\\n", linInd);
+                            // printf("re: %f, %f, %f, %f\\n", paraml, paramr, paramL, paramH);
+                            // printf("reRGB: %f, %f, %f\\n", r[idxLL], g[idxLL], b[idxLL]);
+                        }
+                        else {
+                            int idx = cx + cy * imgSize[1];
+                            outr[idx] = r[idx];
+                            outg[idx] = g[idx];
+                            outb[idx] = b[idx];
+                            printf("re: %f, %f, %f\\n", outr[idx], outg[idx], outb[idx]);
+                        }
+                    }
+                }
+                
+            }
+            // }
+        }
+    """)
+    func = mod.get_function("doublify")
+    return func
+
+
+def wrapRenderSideViewPlus():
+    mod = SourceModule("""
+        #include <stdio.h>
+        __global__ void doublify(float* reconstructed3DPts, int* reconstructed3DPtsindsRec, int* planeIndsRecorder, float* projectM, int* arrSize, int* imgSize, float* outr, float* outg, float* outb, float* r, float* g, float* b, float* xRecMap, float* yRecMap, float* dRecMap, int* maskRecMap, int* xidRecMap, int* yidRecMap)
+        {
+            
+            int blockId = blockIdx.x + blockIdx.y * gridDim.x;
+            int idx = blockId * (blockDim.x * blockDim.y) + (threadIdx.y * blockDim.x) + threadIdx.x;
+            int maxPixelNum = arrSize[0] * arrSize[1];
+            int searchRange = 7;
+            for(int i = idx; i < maxPixelNum; i += gridDim.x * gridDim.y * blockDim.x * blockDim.y){
+            // if(i == 4){
+                float tempPts[4];
+                float projectedPts[4];
+                float normalizedPts[3];
+                for(int j = 0; j < 4; j++){
+                    tempPts[j] = reconstructed3DPts[i * 4 + j];
+                }
+                for(int m = 0; m < 4; m++){
+                    projectedPts[m] = 0;
+                    for(int n = 0; n < 4; n++){
+                        projectedPts[m] += projectM[m * 4 + n] * tempPts[n];
+                    }
+                }
+                normalizedPts[0] = projectedPts[0] / projectedPts[2];
+                normalizedPts[1] = projectedPts[1] / projectedPts[2];
+                normalizedPts[2] = projectedPts[2];
+                int cx = (int)floor(normalizedPts[0]);
+                int cy = (int)floor(normalizedPts[1]);
+
+                /*
+                printf("Aff: \\n");
+                for(int m = 0; m < 4; m++){
+                    for(int n = 0; n < 4; n++){
+                        printf("%f, ", projectM[m * 4 + n]);
+                    }
+                    printf("\\n");
+                }
+                printf("\\n\\n\\n");
+                */
+
+                // printf("normalizedPts: %f, %f, %f\\n", normalizedPts[0], normalizedPts[1], normalizedPts[2]);
+                // printf("ceiledX, ceiledX: %d, %d\\n", cx, cy);
+                // printf("logic Re: %d\\n", (cx >= 0) && (cx < imgSize[1]) && (cy >= 0) && (cy < imgSize[0]) && (normalizedPts[2] > 0) && (planeIndsRecorder[cy * imgSize[1] + cx] == reconstructed3DPtsindsRec[i]));
+
+                if ((cx >= 0) && (cx < imgSize[1]) && (cy >= 0) && (cy < imgSize[0]) && (normalizedPts[2] > 0)){
+                    int testRe = 0;
+                    for(int p = -(searchRange/2); p < searchRange/2; p++){
+                        for(int q = -(searchRange/2); q < searchRange/2; q++){
+                            int iix = p + cx;
+                            int iiy = q + cy;
+                            if ((iix >= 0) && (iix < imgSize[1]) && (iiy >= 0) && (iiy < imgSize[0])){
+                                if (planeIndsRecorder[iiy * imgSize[1] + iix] == reconstructed3DPtsindsRec[i]){
+                                    testRe = 1;
+                                }
+                            }
+                        }
+                    }
+                    if(testRe == 1){
+                        int xind = i / arrSize[0];
+                        int yind = i - xind * arrSize[0];
+                        int linInd = yind * arrSize[1] + xind;
+                        if ((cx != imgSize[1]) && (cy != imgSize[0])){
+                            int idxLL = cx + cy * imgSize[1];
+                            int idxLH = cx + (cy+1) * imgSize[1];
+                            int idxRL = (cx + 1) + cy * imgSize[1];
+                            int idxRH = (cx + 1) + (cy+1) * imgSize[1];
+
+                            float paraml = (float) (cx + 1) - normalizedPts[0];
+                            float paramr = 1 - paraml;
+                            float paramL = (float) (cy + 1) - normalizedPts[1];
+                            float paramH = 1 - paramL;
+                            float rvL = paraml * r[idxLL] + paramr * r[idxRL];
+                            float rvH = paraml * r[idxLH] + paramr * r[idxRH];
+                            outr[linInd] = paramL * rvL + paramH * rvH;
+                            float gvL = paraml * g[idxLL] + paramr * g[idxRL];
+                            float gvH = paraml * g[idxLH] + paramr * g[idxRH];
+                            outg[linInd] = paramL * gvL + paramH * gvH;
+                            float bvL = paraml * b[idxLL] + paramr * b[idxRL];
+                            float bvH = paraml * b[idxLH] + paramr * b[idxRH];
+                            outb[linInd] = paramL * bvL + paramH * bvH;
+                            // printf("re: %f, %f, %f\\n", outr[idxLL], outg[idxLL], outb[idxLL]);
+                            // printf("index : %d, cx: %d, cy : %d\\n", idxLL, cx, cy);
+                            // printf("imgSizex : %d, imgSizey: %d\\n", imgSize[0], imgSize[1]);
+                            // printf("linInd: %d\\n", linInd);
+                            // printf("re: %f, %f, %f, %f\\n", paraml, paramr, paramL, paramH);
+                            // printf("reRGB: %f, %f, %f\\n", r[idxLL], g[idxLL], b[idxLL]);
+                        }
+                        else {
+                            int idx = cx + cy * imgSize[1];
+                            outr[linInd] = r[idx];
+                            outg[linInd] = g[idx];
+                            outb[linInd] = b[idx];
+                            // printf("re: %f, %f, %f\\n", outr[idx], outg[idx], outb[idx]);
+                        }
+                        xRecMap[linInd] = normalizedPts[0];
+                        yRecMap[linInd] = normalizedPts[1];
+                        dRecMap[linInd] = normalizedPts[2];
+                        xidRecMap[linInd] = xind;
+                        yidRecMap[linInd] = yind;
+                        maskRecMap[linInd] = 1;
+                    }
+                }
+
+            }
+            // }
+        }
+    """)
+    func = mod.get_function("doublify")
+    return func
 @jit(nopython=True)
 def naiveMatrixInverse(inpuM):
     return np.linalg.inv(inpuM).astype(np.float32)

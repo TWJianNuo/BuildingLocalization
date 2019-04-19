@@ -864,6 +864,17 @@ def reSizeImg(integratedImage):
     rgb_ex = ImageOps.expand(rgb, border=(0, padTop, 0, padBot), fill=0)
     # rgb_ex.show()
     return rgb_ex
+def reSizeImgWithOutPadding(integratedImage):
+    desiredSize = np.intc(512)
+    charSampledImg = (integratedImage * 255).astype('uint8')
+    width = np.size(charSampledImg, 0)
+    length = np.size(charSampledImg, 1)
+    asLength = desiredSize
+    # asWidth = np.intc(np.round(width / (length / asLength)))
+    asWidth = 155
+    rgb = Image.fromarray((integratedImage * 255).astype('uint8')).resize([asLength, asWidth], Image.ANTIALIAS)
+    # rgb_ex.show()
+    return rgb
 def reSizeImg_irAR(integratedImage):
     asLength = 256
     asWidth = 256
@@ -987,17 +998,15 @@ class GPURender:
         # bdDict_orgRGB = dict()
         for i in range(np.size(bdComp.visibility)):
             if bdComp.visibility[i] == 1:
-                integratedImage, depthMap, imageRGB = renderAndGetwarppedImg(data_reader, i, re, planeBdInsRectmp, 'null', self.func_integration, self.funcLinParamCal, self.func_IntersectLine,
+                integratedImage, depthMap = renderAndGetwarppedImg(data_reader, i, re, planeBdInsRectmp, 'null', self.func_integration, self.funcLinParamCal, self.func_IntersectLine,
                                                  self.funcLineAff, self.func_computeNewBbox, self.func_depthRender, self.func_lineRender,
                                                  self.func_pointCheck, self.func_acceleratedFormPolygons)
                 depthMap_norm = depthMap / maxDepthDist
                 depthMap_norm[depthMap_norm>1] = 0
-                # rgb_ex = reSizeImg_irAR(integratedImage)
-                depth_ex = reSizeImg_irAR(depthMap_norm)
-                imageRGB_ex = reSizeImg_irAR(imageRGB)
+                depth_ex = reSizeImgWithOutPadding(depthMap_norm)
+                imageRGB_ex = reSizeImgWithOutPadding(integratedImage)
                 bdDict_rgb[i] = np.asarray(imageRGB_ex)
                 bdDict_depth[i] = np.asarray(depth_ex)
-                # bdDict_orgRGB[i] = np.asarray(imageRGB_ex)
                 bdDict_imgSize[i] = data_reader.imageSize[i,:]
                 bdDict_trs_grid2oxts[i] = data_reader.trs_grid2oxts[i]
                 bdDict_imgPath[i] = data_reader.rgbFilePaths[i]
@@ -1036,8 +1045,8 @@ class GPURender:
                                                  self.func_pointCheck, self.func_acceleratedFormPolygons)
                 depthMap_norm = depthMap / maxDepthDist
                 depthMap_norm[depthMap_norm>1] = 0
-                rgb_ex = reSizeImg(integratedImage)
-                depth_ex = reSizeImg(depthMap_norm)
+                rgb_ex = reSizeImg_irAR(integratedImage)
+                depth_ex = reSizeImg_irAR(depthMap_norm)
                 bdDict_rgb[i] = np.asarray(rgb_ex)
                 bdDict_depth[i] = np.asarray(depth_ex)
                 bdDict_imgSize[i] = data_reader.imageSize[i,:]
@@ -1125,7 +1134,7 @@ class tt_struct:
             print(seq)
 
     def generatePickle(self):
-        pathPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData_ex'
+        pathPrefix = '/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/trainingData_wrongAspOldRender'
         for seq in self.allSeq:
             seqSvPath = os.path.join(pathPrefix, seq)
             try:
@@ -1208,6 +1217,8 @@ class tt_struct:
                         os.path.join(seqSvPath, str(bdCompIdx) + ".p"),"wb"))
                     print("%dth Bd finished" % bdCompIdx)
 
+
+
 # Render Frame with additional channel
 # tt = tt_struct()
 # tt.generatePickle_seperateFrame()
@@ -1215,3 +1226,6 @@ class tt_struct:
 # Render Frames acquiring warped frames
 tt = tt_struct()
 tt.generatePickle_specPlane()
+
+# tt= tt_struct()
+# tt.generatePickle()

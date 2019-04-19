@@ -250,7 +250,7 @@ if os.path.isfile('/media/shengjie/other/KITTI_scene_understanding/python_code/B
     bsm.initSv()
 else:
     bsm.initLoad()
-writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2_seperateFrame')
+# writer = SummaryWriter('/media/shengjie/other/KITTI_scene_understanding/python_code/BuildingLocalization/runs/baseLine_fixedInput_l2_seperateFrame')
 for i in range(iterationTime):
     randInt = random.randint(0, len(trainComp) - 1)
     curTrainFilePath = trainComp[randInt]
@@ -260,7 +260,7 @@ for i in range(iterationTime):
                             bdcomp.bdComp.visibility, np.sum(bdcomp.bdComp.visibility) > 0)
         lossVal = bsm.train_l2(vds)
         print("%dth iteration, loss is %f" % (i, lossVal))
-        writer.add_scalar('TrainLoss', lossVal, i)
+        # writer.add_scalar('TrainLoss', lossVal, i)
     if i % 200 == 0:
         testLossVals = list()
         for add in testComp:
@@ -270,6 +270,6 @@ for i in range(iterationTime):
                                     bdcomp.bdComp.visibility, np.sum(bdcomp.bdComp.visibility) > 0)
                 testLossVals.append(bsm.test(vds).cpu().detach().numpy())
         print("TestLoss is %f, valid entry is %d" %  (np.mean(testLossVals), len(testLossVals)))
-        writer.add_scalar('TestLoss', np.mean(testLossVals), i)
+        # writer.add_scalar('TestLoss', np.mean(testLossVals), i)
     if i % 500 == 499:
         bsm.sv(i)
