@@ -530,6 +530,7 @@ trainComp = pkr.tranPortion
 
 # bsm.load(1999)
 # writer = SummaryWriter(os.path.join(generalPrefix, 'runs/logLoss2d_conv3d'))
+
 for i in range(iterationTime):
     bdCompInputList = list()
     for k in range(batchSize):

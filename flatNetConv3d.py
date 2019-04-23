@@ -95,7 +95,6 @@ class VGGNet(VGG):
             for layer in range(self.ranges[idx][0], self.ranges[idx][1]):
                 x = self.features[layer](x)
             output["x%d"%(idx+1)] = x
-
         return output
     def init_cus(self):
         pre_vgg = models.vgg16(pretrained=True)
