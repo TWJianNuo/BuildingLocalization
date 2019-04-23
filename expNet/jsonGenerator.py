@@ -5,6 +5,7 @@ infoDict['vgg_LSTM_sideViewViewAngleAligned'] = 'trainData/sideViewAligned'
 infoDict['vgg_LSTM_sideView64_256_withoutBlack'] = 'trainData/sideView64_256_withoutBlack'
 infoDict['vgg_LSTM_globalImg_256_73'] = 'trainData/globalImg_256_73'
 infoDict['vgg_LSTM_globalImg_localCropped_256_256'] = 'trainData/globalImg_localCropped_256_256'
+infoDict['vgg_conv3d_globalImg_256_73'] = 'trainData/globalImg_256_73'
 infoDict['allSeq'] = [
     '2011_09_30_drive_0018_sync',
     '2011_09_26_drive_0096_sync',

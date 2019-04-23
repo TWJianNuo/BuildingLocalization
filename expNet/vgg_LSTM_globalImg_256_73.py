@@ -240,7 +240,7 @@ modelName = 'vgg_LSTM_globalImg_256_73'
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 16
+batchSize = 8
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
 fcn = vgg_LSTM()
 

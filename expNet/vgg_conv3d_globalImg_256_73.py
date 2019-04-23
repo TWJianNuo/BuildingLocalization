@@ -15,10 +15,10 @@ import time
 import pickle
 import glob
 import random
+import json
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-import json
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -69,7 +69,7 @@ class pickleReader():
 
 
 class VGGNet(VGG):
-    def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=False, show_params=False):
+    def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=True, show_params=False):
         super().__init__(make_layers(cfg[model]))
         self.ranges = ranges[model]
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
@@ -81,10 +81,9 @@ class VGGNet(VGG):
             nn.ReLU(True),
             nn.Dropout()
         )
-
         if pretrained:
-            # exec("self.load_state_dict(models.%s(pretrained=True).state_dict())" % model)
             self.init_cus()
+            # exec("self.load_state_dict(models.%s(pretrained=True).state_dict())" % model)
 
         if not requires_grad:
             for param in super().parameters():
@@ -103,17 +102,18 @@ class VGGNet(VGG):
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
         return x
-
     def init_cus(self):
         pre_vgg = models.vgg16(pretrained=True)
         count = 0
         for idx, l in enumerate(list(self.features)):
-            if isinstance(l, nn.Conv2d) or isinstance(l, nn.Linear):
-                if count == 0:
-                    l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
-                else:
-                    l.weight.data = pre_vgg.features[count].weight.clone()
+            if isinstance(l, nn.Conv3d):
+                for i in range(3):
+                    if count != 0:
+                        l.weight.data[:,:,i,:,:] = pre_vgg.features[count].weight.clone()
+                    else:
+                        l.weight.data[:, 0:3, i, :, :] = pre_vgg.features[count].weight.clone()
             count = count + 1
+
 ranges = {
     'vgg11': ((0, 3), (3, 6),  (6, 11),  (11, 16), (16, 21)),
     'vgg13': ((0, 5), (5, 10), (10, 15), (15, 20), (20, 25)),
@@ -132,56 +132,46 @@ cfg = {
 def make_layers(cfg, batch_norm=False):
     layers = []
     in_channels = 4
+    MCount = 0
     for v in cfg:
         if v == 'M':
-            layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
-        else:
-            conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-            if batch_norm:
-                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+            if MCount == 1 or MCount == 0:
+                layers += [nn.MaxPool3d(kernel_size=(1,2,2), stride=(1,2,2))]
             else:
-                layers += [conv2d, nn.ReLU(inplace=True)]
+                layers += [nn.MaxPool3d(kernel_size=2, stride=2)]
+            MCount = MCount + 1
+        else:
+            conv3d = nn.Conv3d(in_channels, v, kernel_size=3, padding=1)
+            if batch_norm:
+                layers += [conv3d, nn.BatchNorm3d(v), nn.ReLU(inplace=True)]
+            else:
+                layers += [conv3d, nn.ReLU(inplace=True)]
             in_channels = v
     return nn.Sequential(*layers)
 
 
 
-class vgg_LSTM(nn.Module):
+class vgg_conv3d(nn.Module):
 
     def __init__(self):
         super().__init__()
         self.n_class = 4
         self.maxDepth = 150
-        self.lstmInput = 4096
-        self.lstmHidden = 1024
-        self.imageTransforms = transforms.Compose([
-            transforms.Normalize([0.485, 0.456, 0.406, 0], [0.229, 0.224, 0.225, 1])
-        ])
 
 
         self.pretrained_net = VGGNet()
-        self.lstm = nn.LSTM(self.lstmInput, self.lstmHidden)
-        self.predictorNorm = nn.Sequential(
-            nn.Linear(1024, 1024),
-            nn.ReLU(True),
-            nn.Linear(1024, 3),
-            nn.Sigmoid(),
-        )
-        # torch.Tensor([[8, 8, 6]])
-        self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
-        self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
+        self.classifier = nn.Conv3d(32, self.n_class, kernel_size=1)
+
+        self.imageTransforms = transforms.Compose([
+            transforms.Normalize([0.485, 0.456, 0.406, 0], [0.229, 0.224, 0.225, 1])
+        ])
         self.opt = optim.SGD(list(self.parameters()), lr=0.00001)
         self.sfax = torch.nn.Softmax(dim = 1)
+        self.selectedFeatureNum = 1024
         self.cuda()
     def forward(self, x):
-        lstmInputList = list()
-        for i in range(x.shape[0]):
-            output = self.pretrained_net(x[i,:,:,:,:])
-            lstmInputList.append(output.unsqueeze(1))
-        lstm_out, lstm_hState = self.lstm(torch.cat(lstmInputList, dim=1))
-        predictNormed = self.predictorNorm(lstm_out[-1,:,:].unsqueeze(1))
-        prediction = (predictNormed[:,0,:] - 0.5) * self.scale + self.bias
-        return prediction
+        output = self.pretrained_net(x)
+        return output  # size=(N, n_class, x.H/1, x.W/1)
     def train_cus(self, bdList):
         imgDT_normalizedList = list()
         gtl = list()
@@ -193,7 +183,7 @@ class vgg_LSTM(nn.Module):
             imgDT_normalized = torch.zeros_like(imgDT).cuda()
             for k in range(imgDT.shape[0]):
                 imgDT_normalized[k,:,:,:] = self.imageTransforms(imgDT[k,:,:,:])
-            imgDT_normalizedList.append(imgDT_normalized.unsqueeze(0))
+            imgDT_normalizedList.append(imgDT_normalized.unsqueeze(0).permute(0,2,1,3,4))
             gtl.append(torch.from_numpy(buildingEntity.bdComp.transition).unsqueeze(0))
             # Test for channel correctness
             # rgbImg = imgD[2, :, :, 0:3]
@@ -209,40 +199,18 @@ class vgg_LSTM(nn.Module):
         self.opt.step()
         return loss
 
-    def test_cus(self, bdList):
-        imgDT_normalizedList = list()
-        gtl = list()
-        for buildingEntity in bdList:
-            imgs = list(buildingEntity.bdDict_rgb.values())
-            depth = list(buildingEntity.bdDict_depth.values())
-            imgD = np.concatenate([np.stack(imgs, axis=0), np.expand_dims(np.stack(depth, axis=0), axis = 3)], axis=3)
-            imgDT = torch.from_numpy(imgD).type(torch.float).permute(0,3,1,2) / 255
-            imgDT_normalized = torch.zeros_like(imgDT).cuda()
-            for k in range(imgDT.shape[0]):
-                imgDT_normalized[k,:,:,:] = self.imageTransforms(imgDT[k,:,:,:])
-            imgDT_normalizedList.append(imgDT_normalized.unsqueeze(0))
-            gtl.append(torch.from_numpy(buildingEntity.bdComp.transition).unsqueeze(0))
-            # Test for channel correctness
-            # rgbImg = imgD[2, :, :, 0:3]
-            # depthImg = imgD[2, :, :, 3]
-            # Image.fromarray(rgbImg).show()
-            # Image.fromarray(depthImg).show()
-        imgDT_normalizedTot = torch.cat(imgDT_normalizedList, dim=0).cuda()
-        gt = torch.cat(gtl, 0).cuda()
-        imputImgOut = self.forward(imgDT_normalizedTot)
-        loss = torch.sum((imputImgOut - gt).pow(2)) / len(bdList)
-        return loss
+
 
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-modelName = 'vgg_LSTM_globalImg_localCropped_256_256'
+modelName = 'vgg_conv3d_globalImg_256_73'
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 8
+batchSize = 16
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
-fcn = vgg_LSTM()
+fcn = vgg_conv3d()
 
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
