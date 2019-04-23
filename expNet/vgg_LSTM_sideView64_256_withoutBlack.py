@@ -78,8 +78,6 @@ class VGGNet(VGG):
             nn.ReLU(True),
             nn.Dropout(),
             nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout()
         )
 
         if pretrained:
@@ -112,7 +110,10 @@ class VGGNet(VGG):
                 if count == 0:
                     l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
                 else:
-                    l.weight.data = pre_vgg.features[count].weight.clone()
+                    if count < 31:
+                        l.weight.data = pre_vgg.features[count].weight.clone()
+                    elif count > 31:
+                        l.weight.data = pre_vgg.classifier[count - 31].weight.clone()
             count = count + 1
 ranges = {
     'vgg11': ((0, 3), (3, 6),  (6, 11),  (11, 16), (16, 21)),

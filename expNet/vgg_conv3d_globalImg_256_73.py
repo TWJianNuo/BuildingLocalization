@@ -69,17 +69,15 @@ class pickleReader():
 
 
 class VGGNet(VGG):
-    def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=True, show_params=False):
+    def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=False, show_params=False):
         super().__init__(make_layers(cfg[model]))
         self.ranges = ranges[model]
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.avgpool = nn.AdaptiveAvgPool3d((1, 7, 7))
         self.classifier = nn.Sequential(
             nn.Linear(512 * 7 * 7, 4096),
             nn.ReLU(True),
             nn.Dropout(),
-            nn.Linear(4096, 4096),
-            nn.ReLU(True),
-            nn.Dropout()
+            nn.Linear(4096, 4096)
         )
         if pretrained:
             self.init_cus()
@@ -106,14 +104,16 @@ class VGGNet(VGG):
         pre_vgg = models.vgg16(pretrained=True)
         count = 0
         for idx, l in enumerate(list(self.features)):
-            if isinstance(l, nn.Conv3d):
-                for i in range(3):
-                    if count != 0:
-                        l.weight.data[:,:,i,:,:] = pre_vgg.features[count].weight.clone()
-                    else:
-                        l.weight.data[:, 0:3, i, :, :] = pre_vgg.features[count].weight.clone()
+            if isinstance(l, nn.Conv2d) or isinstance(l, nn.Linear):
+                if count < 31:
+                    for i in range(3):
+                        if count != 0:
+                            l.weight.data[:, :, i, :, :] = pre_vgg.features[count].weight.clone()
+                        else:
+                            l.weight.data[:, 0:3, i, :, :] = pre_vgg.features[count].weight.clone()
+                elif count > 31:
+                    l.weight.data = pre_vgg.classifier[count - 31].weight.clone()
             count = count + 1
-
 ranges = {
     'vgg11': ((0, 3), (3, 6),  (6, 11),  (11, 16), (16, 21)),
     'vgg13': ((0, 5), (5, 10), (10, 15), (15, 20), (20, 25)),
@@ -157,21 +157,26 @@ class vgg_conv3d(nn.Module):
         super().__init__()
         self.n_class = 4
         self.maxDepth = 150
-
-
-        self.pretrained_net = VGGNet()
-        self.classifier = nn.Conv3d(32, self.n_class, kernel_size=1)
-
         self.imageTransforms = transforms.Compose([
             transforms.Normalize([0.485, 0.456, 0.406, 0], [0.229, 0.224, 0.225, 1])
         ])
+
+        self.pretrained_net = VGGNet()
+        self.predictorNorm = nn.Sequential(
+            nn.Linear(4096, 1024),
+            nn.ReLU(True),
+            nn.Linear(1024, 3),
+            nn.Sigmoid(),
+        )
+        self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
+        self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
         self.opt = optim.SGD(list(self.parameters()), lr=0.00001)
-        self.sfax = torch.nn.Softmax(dim = 1)
-        self.selectedFeatureNum = 1024
         self.cuda()
     def forward(self, x):
         output = self.pretrained_net(x)
-        return output  # size=(N, n_class, x.H/1, x.W/1)
+        predictNormed = self.predictorNorm(output.unsqueeze(1))
+        prediction = (predictNormed[:,0,:] - 0.5) * self.scale + self.bias
+        return prediction  # size=(N, n_class, x.H/1, x.W/1)
     def train_cus(self, bdList):
         imgDT_normalizedList = list()
         gtl = list()
