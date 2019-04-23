@@ -171,7 +171,7 @@ class vgg_LSTM(nn.Module):
         # torch.Tensor([[8, 8, 6]])
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
-        self.opt = optim.SGD(list(self.parameters()), lr=0.00001)
+        self.opt = optim.SGD(list(self.parameters()), lr=0.001)
         self.sfax = torch.nn.Softmax(dim = 1)
         self.cuda()
     def forward(self, x):

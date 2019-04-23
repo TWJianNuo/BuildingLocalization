@@ -170,7 +170,7 @@ class vgg_conv3d(nn.Module):
         )
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
-        self.opt = optim.SGD(list(self.parameters()), lr=0.00001)
+        self.opt = optim.SGD(list(self.parameters()), lr=0.001)
         self.cuda()
     def forward(self, x):
         output = self.pretrained_net(x)
@@ -203,7 +203,32 @@ class vgg_conv3d(nn.Module):
         loss.backward()
         self.opt.step()
         return loss
-
+    def test_cus(self, bdList):
+        imgDT_normalizedList = list()
+        gtl = list()
+        for buildingEntity in bdList:
+            imgs = list(buildingEntity.bdDict_rgb.values())
+            depth = list(buildingEntity.bdDict_depth.values())
+            imgD = np.concatenate([np.stack(imgs, axis=0), np.expand_dims(np.stack(depth, axis=0), axis = 3)], axis=3)
+            imgDT = torch.from_numpy(imgD).type(torch.float).permute(0,3,1,2) / 255
+            imgDT_normalized = torch.zeros_like(imgDT).cuda()
+            for k in range(imgDT.shape[0]):
+                imgDT_normalized[k,:,:,:] = self.imageTransforms(imgDT[k,:,:,:])
+            imgDT_normalizedList.append(imgDT_normalized.unsqueeze(0).permute(0,2,1,3,4))
+            gtl.append(torch.from_numpy(buildingEntity.bdComp.transition).unsqueeze(0))
+            # Test for channel correctness
+            # rgbImg = imgD[2, :, :, 0:3]
+            # depthImg = imgD[2, :, :, 3]
+            # Image.fromarray(rgbImg).show()
+            # Image.fromarray(depthImg).show()
+        imgDT_normalizedTot = torch.cat(imgDT_normalizedList, dim=0).cuda()
+        gt = torch.cat(gtl, 0).cuda()
+        imputImgOut = self.forward(imgDT_normalizedTot)
+        loss = torch.sum((imputImgOut - gt).pow(2)) / len(bdList)
+        self.opt.zero_grad()
+        loss.backward()
+        self.opt.step()
+        return loss
 
 
 with open('jsonParam.json') as data_file:
