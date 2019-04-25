@@ -1169,7 +1169,13 @@ def wrapRenderSideViewPlus():
                 normalizedPts[2] = projectedPts[2];
                 int cx = (int)floor(normalizedPts[0]);
                 int cy = (int)floor(normalizedPts[1]);
-
+                
+                
+                int txind = i / arrSize[0];
+                int tyind = i - txind * arrSize[0];
+                int tlinInd = tyind * arrSize[1] + txind;
+                xidRecMap[tlinInd] = txind;
+                yidRecMap[tlinInd] = tyind;
                 /*
                 printf("Aff: \\n");
                 for(int m = 0; m < 4; m++){
@@ -1238,8 +1244,6 @@ def wrapRenderSideViewPlus():
                         xRecMap[linInd] = normalizedPts[0];
                         yRecMap[linInd] = normalizedPts[1];
                         dRecMap[linInd] = normalizedPts[2];
-                        xidRecMap[linInd] = xind;
-                        yidRecMap[linInd] = yind;
                         maskRecMap[linInd] = 1;
                     }
                 }

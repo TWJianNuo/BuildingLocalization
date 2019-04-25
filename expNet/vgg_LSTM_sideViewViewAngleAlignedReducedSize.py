@@ -72,14 +72,12 @@ class VGGNet(VGG):
     def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=False, show_params=False):
         super().__init__(make_layers(cfg[model]))
         self.ranges = ranges[model]
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 4096),
+            nn.Linear(512 * 2 * 8, 4096),
             nn.ReLU(True),
             nn.Dropout(),
             nn.Linear(4096, 4096)
         )
-
         if pretrained:
             # exec("self.load_state_dict(models.%s(pretrained=True).state_dict())" % model)
             self.init_cus()
@@ -97,7 +95,6 @@ class VGGNet(VGG):
 
     def forward(self, x):
         x = self.features(x)
-        x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
         return x
@@ -110,9 +107,9 @@ class VGGNet(VGG):
                 if count == 0:
                     l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
                 else:
-                    if count < 31:
+                    if count < 24:
                         l.weight.data = pre_vgg.features[count].weight.clone()
-                    elif count > 31:
+                    elif count > 24:
                         l.weight.data = pre_vgg.classifier[count - 31].weight.clone()
             count = count + 1
 ranges = {
@@ -133,9 +130,13 @@ cfg = {
 def make_layers(cfg, batch_norm=False):
     layers = []
     in_channels = 4
+    count = 0
     for v in cfg:
         if v == 'M':
-            layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            if count != 13:
+                layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            else:
+                layers += [nn.MaxPool2d(kernel_size=4, stride=4)]
         else:
             conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
             if batch_norm:
@@ -143,6 +144,8 @@ def make_layers(cfg, batch_norm=False):
             else:
                 layers += [conv2d, nn.ReLU(inplace=True)]
             in_channels = v
+        count = count + 1
+
     return nn.Sequential(*layers)
 
 
@@ -172,7 +175,7 @@ class vgg_LSTM(nn.Module):
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
         self.opt = optim.SGD(list(self.parameters()), lr=0.01)
-        self.sfax = torch.nn.Softmax(dim = 1)
+        assert (len(list(self.parameters())) == len(list(self.pretrained_net.parameters())) + len(list(self.lstm.parameters())) + len(list(self.predictorNorm.parameters())) + len([self.scale]) + len([self.bias])), "Parameter not trained"
         self.cuda()
     def forward(self, x):
         lstmInputList = list()
@@ -237,11 +240,10 @@ class vgg_LSTM(nn.Module):
         torch.save(self.state_dict(), path)
     def load(self, path):
         self.load_state_dict(torch.load(path))
-
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-# modelName = 'vgg_LSTM_globalImg_256_73'
+# modelName = 'vgg_LSTM_sideViewViewAngleAligned'
 fileName = os.path.basename(__file__)
 fileNameComp = fileName.split('.')
 modelName = fileNameComp[0]
@@ -249,14 +251,14 @@ print(modelName)
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 4
+batchSize = 8
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
 fcn = vgg_LSTM()
 
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
-writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName))
+writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName + '3'))
 for i in range(100000):
     if i % 200 == 0:
         tLossl = list()

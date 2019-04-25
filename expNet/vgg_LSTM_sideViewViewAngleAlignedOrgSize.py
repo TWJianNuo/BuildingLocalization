@@ -79,7 +79,6 @@ class VGGNet(VGG):
             nn.Dropout(),
             nn.Linear(4096, 4096)
         )
-
         if pretrained:
             # exec("self.load_state_dict(models.%s(pretrained=True).state_dict())" % model)
             self.init_cus()
@@ -110,9 +109,9 @@ class VGGNet(VGG):
                 if count == 0:
                     l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
                 else:
-                    if count < 31:
+                    if count < 30:
                         l.weight.data = pre_vgg.features[count].weight.clone()
-                    elif count > 31:
+                    elif count >= 30:
                         l.weight.data = pre_vgg.classifier[count - 31].weight.clone()
             count = count + 1
 ranges = {
@@ -143,6 +142,7 @@ def make_layers(cfg, batch_norm=False):
             else:
                 layers += [conv2d, nn.ReLU(inplace=True)]
             in_channels = v
+
     return nn.Sequential(*layers)
 
 
@@ -171,8 +171,8 @@ class vgg_LSTM(nn.Module):
         # torch.Tensor([[8, 8, 6]])
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
-        self.opt = optim.SGD(list(self.parameters()), lr=0.01)
-        self.sfax = torch.nn.Softmax(dim = 1)
+        self.opt = optim.SGD(list(self.parameters()), lr=0.001)
+        assert (len(list(self.parameters())) == len(list(self.pretrained_net.parameters())) + len(list(self.lstm.parameters())) + len(list(self.predictorNorm.parameters())) + len([self.scale]) + len([self.bias])), "Parameter not trained"
         self.cuda()
     def forward(self, x):
         lstmInputList = list()
@@ -237,11 +237,10 @@ class vgg_LSTM(nn.Module):
         torch.save(self.state_dict(), path)
     def load(self, path):
         self.load_state_dict(torch.load(path))
-
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-# modelName = 'vgg_LSTM_globalImg_256_73'
+# modelName = 'vgg_LSTM_sideViewViewAngleAligned'
 fileName = os.path.basename(__file__)
 fileNameComp = fileName.split('.')
 modelName = fileNameComp[0]
@@ -249,14 +248,14 @@ print(modelName)
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 4
+batchSize = 8
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
 fcn = vgg_LSTM()
 
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
-writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName))
+writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName + "2"))
 for i in range(100000):
     if i % 200 == 0:
         tLossl = list()
@@ -279,7 +278,7 @@ for i in range(100000):
             blist.append(bdcomp)
     lossVal = fcn.train_cus(blist)
     if lossVal is not None:
-        print("%dth iteration, loss is %f" % (i, lossVal))
+        print("%d th iteration, loss is %f" % (i, lossVal))
         writer.add_scalar('TrainLoss', lossVal, i)
     if i % 500 == 499:
         rootPath = os.path.join(generalPrefix, 'svModel')

@@ -72,9 +72,8 @@ class VGGNet(VGG):
     def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=False, show_params=False):
         super().__init__(make_layers(cfg[model]))
         self.ranges = ranges[model]
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 4096),
+            nn.Linear(512 * 2 * 8, 4096),
             nn.ReLU(True),
             nn.Dropout(),
             nn.Linear(4096, 4096)
@@ -97,7 +96,6 @@ class VGGNet(VGG):
 
     def forward(self, x):
         x = self.features(x)
-        x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
         return x
@@ -105,14 +103,14 @@ class VGGNet(VGG):
     def init_cus(self):
         pre_vgg = models.vgg16(pretrained=True)
         count = 0
-        for idx, l in enumerate(list(self.features) + list(self.classifier)):
+        for idx, l in enumerate(list(self.features)):
             if isinstance(l, nn.Conv2d) or isinstance(l, nn.Linear):
                 if count == 0:
                     l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
                 else:
                     if count < 31:
                         l.weight.data = pre_vgg.features[count].weight.clone()
-                    elif count > 31:
+                    elif count >= 31:
                         l.weight.data = pre_vgg.classifier[count - 31].weight.clone()
             count = count + 1
 ranges = {
@@ -171,7 +169,7 @@ class vgg_LSTM(nn.Module):
         # torch.Tensor([[8, 8, 6]])
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
-        self.opt = optim.SGD(list(self.parameters()), lr=0.01)
+        self.opt = optim.SGD(list(self.parameters()), lr=0.05)
         self.sfax = torch.nn.Softmax(dim = 1)
         self.cuda()
     def forward(self, x):
@@ -237,11 +235,10 @@ class vgg_LSTM(nn.Module):
         torch.save(self.state_dict(), path)
     def load(self, path):
         self.load_state_dict(torch.load(path))
-
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-# modelName = 'vgg_LSTM_globalImg_256_73'
+# modelName = 'vgg_LSTM_sideViewViewAngleAligned'
 fileName = os.path.basename(__file__)
 fileNameComp = fileName.split('.')
 modelName = fileNameComp[0]
@@ -258,6 +255,17 @@ trainComp = pkr.tranPortion
 
 writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName))
 for i in range(100000):
+    blist = list()
+    for k in range(batchSize):
+        ranint = random.randint(0, len(trainComp) - 1)
+        curPath = trainComp[ranint]
+        with open(curPath, "rb") as input:
+            bdcomp = pickle.load(input)
+            blist.append(bdcomp)
+    lossVal = fcn.train_cus(blist)
+    if lossVal is not None:
+        print("%dth iteration, loss is %f" % (i, lossVal))
+        writer.add_scalar('TrainLoss', lossVal, i)
     if i % 200 == 0:
         tLossl = list()
         for add in testComp:
@@ -270,18 +278,7 @@ for i in range(100000):
         if np.mean(tLossl) > 0:
             a = 1
             writer.add_scalar('TestLoss', np.mean(tLossl), i)
-    blist = list()
-    for k in range(batchSize):
-        ranint = random.randint(0, len(trainComp) - 1)
-        curPath = trainComp[ranint]
-        with open(curPath, "rb") as input:
-            bdcomp = pickle.load(input)
-            blist.append(bdcomp)
-    lossVal = fcn.train_cus(blist)
-    if lossVal is not None:
-        print("%dth iteration, loss is %f" % (i, lossVal))
-        writer.add_scalar('TrainLoss', lossVal, i)
-    if i % 500 == 499:
+    if i % 500 == 0:
         rootPath = os.path.join(generalPrefix, 'svModel')
         dirPath = os.path.join(generalPrefix, 'svModel', modelName)
         try:

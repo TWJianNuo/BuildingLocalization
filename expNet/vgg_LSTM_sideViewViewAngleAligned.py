@@ -64,7 +64,7 @@ class pickleReader():
                 self.totPathRec.append(name)
         # Split to 80% as training and 20% as test
         random.Random(30).shuffle(self.totPathRec)
-        self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.8)]
+        self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.2)]
         self.testPortion = self.totPathRec[int(len(self.totPathRec) * 0.8):]
 
 
@@ -72,14 +72,12 @@ class VGGNet(VGG):
     def __init__(self, pretrained=True, model='vgg16', requires_grad=True, remove_fc=False, show_params=False):
         super().__init__(make_layers(cfg[model]))
         self.ranges = ranges[model]
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         self.classifier = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 4096),
+            nn.Linear(512 * 2 * 8, 4096),
             nn.ReLU(True),
             nn.Dropout(),
             nn.Linear(4096, 4096)
         )
-
         if pretrained:
             # exec("self.load_state_dict(models.%s(pretrained=True).state_dict())" % model)
             self.init_cus()
@@ -97,7 +95,6 @@ class VGGNet(VGG):
 
     def forward(self, x):
         x = self.features(x)
-        x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
         return x
@@ -105,7 +102,7 @@ class VGGNet(VGG):
     def init_cus(self):
         pre_vgg = models.vgg16(pretrained=True)
         count = 0
-        for idx, l in enumerate(list(self.features)):
+        for idx, l in enumerate(list(self.features) + list(self.classifier)):
             if isinstance(l, nn.Conv2d) or isinstance(l, nn.Linear):
                 if count == 0:
                     l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
@@ -143,6 +140,7 @@ def make_layers(cfg, batch_norm=False):
             else:
                 layers += [conv2d, nn.ReLU(inplace=True)]
             in_channels = v
+
     return nn.Sequential(*layers)
 
 
@@ -171,8 +169,8 @@ class vgg_LSTM(nn.Module):
         # torch.Tensor([[8, 8, 6]])
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
-        self.opt = optim.SGD(list(self.parameters()), lr=0.001)
-        self.sfax = torch.nn.Softmax(dim = 1)
+        self.opt = optim.SGD(list(self.parameters()), lr=0.0001)
+        assert (len(list(self.parameters())) == len(list(self.pretrained_net.parameters())) + len(list(self.lstm.parameters())) + len(list(self.predictorNorm.parameters())) + len([self.scale]) + len([self.bias])), "Parameter not trained"
         self.cuda()
     def forward(self, x):
         lstmInputList = list()
@@ -204,7 +202,8 @@ class vgg_LSTM(nn.Module):
         imgDT_normalizedTot = torch.cat(imgDT_normalizedList, dim=0).cuda()
         gt = torch.cat(gtl, 0).cuda()
         imputImgOut = self.forward(imgDT_normalizedTot)
-        loss = torch.sum((imputImgOut - gt).pow(2)) / len(bdList)
+        # loss = torch.sum(torch.abs(imputImgOut - gt)) / len(bdList) / 3
+        loss = torch.sum(((imputImgOut - gt) * 10).pow(2)) / len(bdList)
         self.opt.zero_grad()
         loss.backward()
         self.opt.step()
@@ -231,25 +230,46 @@ class vgg_LSTM(nn.Module):
         imgDT_normalizedTot = torch.cat(imgDT_normalizedList, dim=0).cuda()
         gt = torch.cat(gtl, 0).cuda()
         imputImgOut = self.forward(imgDT_normalizedTot)
-        loss = torch.sum((imputImgOut - gt).pow(2)) / len(bdList)
+        loss = torch.sum(torch.abs(imputImgOut - gt)) / len(bdList) / 3
         return loss
-
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-modelName = 'vgg_LSTM_sideViewViewAngleAligned'
+# modelName = 'vgg_LSTM_sideViewViewAngleAligned'
+fileName = os.path.basename(__file__)
+fileNameComp = fileName.split('.')
+modelName = fileNameComp[0]
+print(modelName)
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 16
+batchSize = 8
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
 fcn = vgg_LSTM()
 
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
-writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName))
+writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName + '6'))
 for i in range(100000):
+    """
+    if i % 200 == 0:
+        tLossl = list()
+        for add in testComp:
+            with open(add, "rb") as input:
+                bdcomp = pickle.load(input)
+                testVal = fcn.test_cus([bdcomp])
+                if testVal is not None:
+                    tLossl.append(testVal.cpu().detach().numpy())
+        print("TestLoss is %f" % np.mean(tLossl))
+        if np.mean(tLossl) > 0:
+            a = 1
+            writer.add_scalar('TestLoss', np.mean(tLossl), i)
+    """
     blist = list()
     for k in range(batchSize):
         ranint = random.randint(0, len(trainComp) - 1)
@@ -261,14 +281,17 @@ for i in range(100000):
     if lossVal is not None:
         print("%dth iteration, loss is %f" % (i, lossVal))
         writer.add_scalar('TrainLoss', lossVal, i)
-    if i % 200 == 0:
-        tLossl = list()
-        for add in testComp:
-            with open(add, "rb") as input:
-                bdcomp = pickle.load(input)
-                testVal = fcn.test_cus([bdcomp])
-                if testVal is not None:
-                    tLossl.append(testVal.cpu().detach().numpy())
-        print("TestLoss is %f" % np.mean(tLossl))
-        if np.mean(tLossl) > 0:
-            writer.add_scalar('TestLoss', np.mean(tLossl), i)
+    """
+    if i % 500 == 499:
+        rootPath = os.path.join(generalPrefix, 'svModel')
+        dirPath = os.path.join(generalPrefix, 'svModel', modelName)
+        try:
+            os.mkdir(rootPath)
+        except OSError:
+            a = 1
+        try:
+            os.mkdir(dirPath)
+        except OSError:
+            a = 1
+        fcn.save(os.path.join(dirPath, str(i)))
+    """

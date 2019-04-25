@@ -132,14 +132,9 @@ cfg = {
 def make_layers(cfg, batch_norm=False):
     layers = []
     in_channels = 4
-    MCount = 0
     for v in cfg:
         if v == 'M':
-            if MCount == 1 or MCount == 0:
-                layers += [nn.MaxPool3d(kernel_size=(1,2,2), stride=(1,2,2))]
-            else:
-                layers += [nn.MaxPool3d(kernel_size=2, stride=2)]
-            MCount = MCount + 1
+            layers += [nn.MaxPool3d(kernel_size=(1,2,2), stride=(1,2,2))]
         else:
             conv3d = nn.Conv3d(in_channels, v, kernel_size=3, padding=1)
             if batch_norm:
@@ -170,7 +165,7 @@ class vgg_conv3d(nn.Module):
         )
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
-        self.opt = optim.SGD(list(self.parameters()), lr=0.001)
+        self.opt = optim.SGD(list(self.parameters()), lr=0.01)
         self.cuda()
     def forward(self, x):
         output = self.pretrained_net(x)
@@ -224,21 +219,28 @@ class vgg_conv3d(nn.Module):
         imgDT_normalizedTot = torch.cat(imgDT_normalizedList, dim=0).cuda()
         gt = torch.cat(gtl, 0).cuda()
         imputImgOut = self.forward(imgDT_normalizedTot)
-        loss = torch.sum((imputImgOut - gt).pow(2)) / len(bdList)
+        loss = torch.sum(torch.abs(imputImgOut - gt)) / len(bdList) / 3
         self.opt.zero_grad()
         loss.backward()
         self.opt.step()
         return loss
-
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+    def load(self, path):
+        self.load_state_dict(torch.load(path))
 
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-modelName = 'vgg_conv3d_globalImg_256_73'
+# modelName = 'vgg_conv3d_globalImg_256_73'
+fileName = os.path.basename(__file__)
+fileNameComp = fileName.split('.')
+modelName = fileNameComp[0]
+print(modelName)
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 16
+batchSize = 4
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
 fcn = vgg_conv3d()
 
@@ -247,6 +249,18 @@ trainComp = pkr.tranPortion
 
 writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName))
 for i in range(100000):
+    if i % 200 == 0:
+        tLossl = list()
+        for add in testComp:
+            with open(add, "rb") as input:
+                bdcomp = pickle.load(input)
+                testVal = fcn.test_cus([bdcomp])
+                if testVal is not None:
+                    tLossl.append(testVal.cpu().detach().numpy())
+        print("TestLoss is %f" % np.mean(tLossl))
+        if np.mean(tLossl) > 0:
+            a = 1
+            writer.add_scalar('TestLoss', np.mean(tLossl), i)
     blist = list()
     for k in range(batchSize):
         ranint = random.randint(0, len(trainComp) - 1)
@@ -258,14 +272,15 @@ for i in range(100000):
     if lossVal is not None:
         print("%dth iteration, loss is %f" % (i, lossVal))
         writer.add_scalar('TrainLoss', lossVal, i)
-    if i % 200 == 0:
-        tLossl = list()
-        for add in testComp:
-            with open(add, "rb") as input:
-                bdcomp = pickle.load(input)
-                testVal = fcn.test_cus([bdcomp])
-                if testVal is not None:
-                    tLossl.append(testVal.cpu().detach().numpy())
-        print("TestLoss is %f" % np.mean(tLossl))
-        if np.mean(tLossl) > 0:
-            writer.add_scalar('TestLoss', np.mean(tLossl), i)
+    if i % 500 == 499:
+        rootPath = os.path.join(generalPrefix, 'svModel')
+        dirPath = os.path.join(generalPrefix, 'svModel', modelName)
+        try:
+            os.mkdir(rootPath)
+        except OSError:
+            a = 1
+        try:
+            os.mkdir(dirPath)
+        except OSError:
+            a = 1
+        fcn.save(os.path.join(dirPath, str(i)))

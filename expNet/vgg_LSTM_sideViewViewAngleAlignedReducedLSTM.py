@@ -64,7 +64,7 @@ class pickleReader():
                 self.totPathRec.append(name)
         # Split to 80% as training and 20% as test
         random.Random(30).shuffle(self.totPathRec)
-        self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.8)]
+        self.tranPortion = self.totPathRec[0:int(len(self.totPathRec) * 0.2)]
         self.testPortion = self.totPathRec[int(len(self.totPathRec) * 0.8):]
 
 
@@ -77,9 +77,12 @@ class VGGNet(VGG):
             nn.Linear(512 * 7 * 7, 4096),
             nn.ReLU(True),
             nn.Dropout(),
-            nn.Linear(4096, 4096)
+            nn.Linear(4096, 4096),
+            nn.ReLU(True),
+            nn.Linear(4096, 1024),
+            nn.ReLU(True),
+            nn.Linear(1024, 128)
         )
-
         if pretrained:
             # exec("self.load_state_dict(models.%s(pretrained=True).state_dict())" % model)
             self.init_cus()
@@ -110,9 +113,9 @@ class VGGNet(VGG):
                 if count == 0:
                     l.weight.data[:,0:3,:,:] = pre_vgg.features[count].weight.clone()
                 else:
-                    if count < 31:
+                    if count < 30:
                         l.weight.data = pre_vgg.features[count].weight.clone()
-                    elif count > 31:
+                    elif count >= 30 and count <=34:
                         l.weight.data = pre_vgg.classifier[count - 31].weight.clone()
             count = count + 1
 ranges = {
@@ -143,6 +146,7 @@ def make_layers(cfg, batch_norm=False):
             else:
                 layers += [conv2d, nn.ReLU(inplace=True)]
             in_channels = v
+
     return nn.Sequential(*layers)
 
 
@@ -153,8 +157,8 @@ class vgg_LSTM(nn.Module):
         super().__init__()
         self.n_class = 4
         self.maxDepth = 150
-        self.lstmInput = 4096
-        self.lstmHidden = 1024
+        self.lstmInput = 128
+        self.lstmHidden = 128
         self.imageTransforms = transforms.Compose([
             transforms.Normalize([0.485, 0.456, 0.406, 0], [0.229, 0.224, 0.225, 1])
         ])
@@ -163,16 +167,16 @@ class vgg_LSTM(nn.Module):
         self.pretrained_net = VGGNet()
         self.lstm = nn.LSTM(self.lstmInput, self.lstmHidden)
         self.predictorNorm = nn.Sequential(
-            nn.Linear(1024, 1024),
+            nn.Linear(self.lstmInput, self.lstmHidden),
             nn.ReLU(True),
-            nn.Linear(1024, 3),
+            nn.Linear(self.lstmHidden, 3),
             nn.Sigmoid(),
         )
         # torch.Tensor([[8, 8, 6]])
         self.scale = nn.Parameter(torch.Tensor([[8, 8, 6]]))
         self.bias = nn.Parameter(torch.Tensor([[0, 0, 1]]))
         self.opt = optim.SGD(list(self.parameters()), lr=0.01)
-        self.sfax = torch.nn.Softmax(dim = 1)
+        assert (len(list(self.parameters())) == len(list(self.pretrained_net.parameters())) + len(list(self.lstm.parameters())) + len(list(self.predictorNorm.parameters())) + len([self.scale]) + len([self.bias])), "Parameter not trained"
         self.cuda()
     def forward(self, x):
         lstmInputList = list()
@@ -237,11 +241,10 @@ class vgg_LSTM(nn.Module):
         torch.save(self.state_dict(), path)
     def load(self, path):
         self.load_state_dict(torch.load(path))
-
 with open('jsonParam.json') as data_file:
     jsonParam = json.load(data_file)
 
-# modelName = 'vgg_LSTM_globalImg_256_73'
+# modelName = 'vgg_LSTM_sideViewViewAngleAligned'
 fileName = os.path.basename(__file__)
 fileNameComp = fileName.split('.')
 modelName = fileNameComp[0]
@@ -249,14 +252,14 @@ print(modelName)
 datasetName = jsonParam[modelName]
 generalPrefix = jsonParam['prefixPath']
 allSeq = jsonParam['allSeq']
-batchSize = 4
+batchSize = 8
 pkr = pickleReader(allSeq, generalPrefix, datasetName)
 fcn = vgg_LSTM()
 
 testComp = pkr.testPortion
 trainComp = pkr.tranPortion
 
-writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName))
+writer = SummaryWriter(os.path.join(generalPrefix, 'runs/' + modelName + "3"))
 for i in range(100000):
     if i % 200 == 0:
         tLossl = list()
@@ -270,6 +273,7 @@ for i in range(100000):
         if np.mean(tLossl) > 0:
             a = 1
             writer.add_scalar('TestLoss', np.mean(tLossl), i)
+
     blist = list()
     for k in range(batchSize):
         ranint = random.randint(0, len(trainComp) - 1)
@@ -279,8 +283,9 @@ for i in range(100000):
             blist.append(bdcomp)
     lossVal = fcn.train_cus(blist)
     if lossVal is not None:
-        print("%dth iteration, loss is %f" % (i, lossVal))
+        print("%d th iteration, loss is %f" % (i, lossVal))
         writer.add_scalar('TrainLoss', lossVal, i)
+
     if i % 500 == 499:
         rootPath = os.path.join(generalPrefix, 'svModel')
         dirPath = os.path.join(generalPrefix, 'svModel', modelName)
